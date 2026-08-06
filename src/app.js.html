@@ -674,6 +674,22 @@ function wireSummary() {
   $('#btnBackToPreview').addEventListener('click', function () { showPage('transcript-preview'); });
   $('#btnGenAll').addEventListener('click', generateAllTopics);
   $('#summaryList').addEventListener('click', onSummaryClick);
+  $('#btnGenerateDoc').addEventListener('click', generateDocument);
+}
+
+function generateDocument() {
+  var btn = $('#btnGenerateDoc');
+  setBusy(btn, true, 'กำลังสร้างเอกสาร…');
+  srv('generateMeetingDocument', AM.job.job_id).then(function (res) {
+    setBusy(btn, false);
+    var link = $('#btnOpenDoc');
+    link.href = res.url; link.hidden = false;
+    $('#generateAlert').innerHTML = '<div class="alert ok">สร้างเอกสารสำเร็จ — เปิดได้จากปุ่มด้านล่าง</div>';
+    toast('สร้าง Google Docs สำเร็จ', 'ok');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#generateAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
 }
 
 function onEnterSummary() {
