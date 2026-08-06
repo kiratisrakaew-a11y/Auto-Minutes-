@@ -101,6 +101,7 @@ function boot() {
     }
     AM.user = data.user;
     AM.templates = data.templates || [];
+    AM.settings = data.settings || {};
     var badge = $('#userBadge');
     badge.hidden = false;
     badge.innerHTML = esc(AM.user.email) + ' · <b>' + esc(AM.user.role) + '</b>';
@@ -666,6 +667,215 @@ function previewSaveNext() {
     setBusy(btn, false);
     goPage('summary-review');
   }).catch(function (e) { setBusy(btn, false); toast(errMsg(e), 'err'); });
+}
+
+// ---- Page 5: AI summary review + generate (Phase 5) ----
+function wireSummary() {
+  $('#btnBackToPreview').addEventListener('click', function () { showPage('transcript-preview'); });
+  $('#btnGenAll').addEventListener('click', generateAllTopics);
+  $('#summaryList').addEventListener('click', onSummaryClick);
+}
+
+function onEnterSummary() {
+  var s = AM.settings || {};
+  $('#aiModeNote').textContent = s.mock ? 'โหมด: MOCK (ยังไม่ยิง Gemini จริง)' : ('โหมด: Gemini · ' + (s.model || ''));
+  renderSummary();
+  updateGenerateGate();
+}
+
+function effResult(topic) { return topic.user_edited_result || topic.ai_result || null; }
+
+function renderSummary() {
+  var topics = AM.job.topics || [];
+  $('#summaryList').innerHTML = topics.map(summaryTopicBlock).join('');
+  updateAiProgress();
+}
+
+function summaryTopicBlock(topic) {
+  var st = topic.ai_status || 'PENDING';
+  var pillClass = { PENDING: 'pending', PROCESSING: 'processing', COMPLETED: 'completed', FAILED: 'failed' }[st] || 'pending';
+  var res = effResult(topic);
+  var body = res ? summaryEditor(topic, res) :
+    '<div class="sum-body muted">ยังไม่ได้สร้างสรุป — กด “สร้างสรุป”</div>';
+
+  return '<div class="sum-block" data-topic="' + esc(topic.topic_no) + '">' +
+    '<div class="sum-head">' +
+      '<div><b>' + esc(topic.topic_no + ' ' + (topic.topic_title || '')) + '</b> ' +
+        '<span class="pill ' + pillClass + '">' + esc(st) + '</span>' +
+        (topic.approved ? ' <span class="pill completed">ยืนยันแล้ว</span>' : '') + '</div>' +
+      '<div class="row-actions">' +
+        '<button class="btn ghost sm act-gen">' + (res ? 'สร้างใหม่' : 'สร้างสรุป') + '</button>' +
+      '</div>' +
+    '</div>' + body + '</div>';
+}
+
+function summaryEditor(topic, r) {
+  var spk = (r.speakerSummaries || []).map(function (s, i) {
+    return '<div class="sum-field"><label>ผู้พูด ' + esc(s.speaker) + '</label>' +
+      '<textarea class="f-spk" data-i="' + i + '" data-speaker="' + esc(s.speaker) + '">' +
+      esc((s.keyPoints || []).join('\n')) + '</textarea></div>';
+  }).join('');
+
+  var decisions = (r.decisions || []).map(function (d) {
+    return (d.decision || '') + (d.status ? '  [' + d.status + ']' : '');
+  }).join('\n');
+  var actions = (r.actionItems || []).map(function (a) {
+    return [a.action || '', a.owner || '', a.dueText || a.dueDate || ''].join(' | ');
+  }).join('\n');
+  var questions = (r.questions || []).map(function (q) {
+    return (q.speaker ? q.speaker + ': ' : '') + (q.question || '') + (q.timestamp ? ' (' + q.timestamp + ')' : '');
+  }).join('\n');
+
+  return '<div class="sum-body">' +
+    '<div class="sum-field"><label>สรุปการอภิปราย</label><textarea class="f-disc">' + esc(r.discussionSummary || '') + '</textarea></div>' +
+    spk +
+    '<div class="sum-field"><label>คำถามที่เกิดขึ้น (บรรทัดละ 1 ข้อ)</label><textarea class="f-q">' + esc(questions) + '</textarea></div>' +
+    '<div class="sum-field"><label>มติ / ข้อสรุป (บรรทัดละ 1 มติ)</label><textarea class="f-dec">' + esc(decisions) + '</textarea></div>' +
+    '<div class="sum-field"><label>Action Items (รูปแบบ: งาน | ผู้รับผิดชอบ | กำหนดเวลา)</label><textarea class="f-act">' + esc(actions) + '</textarea></div>' +
+    '<div class="inline-note">confidence: ' + (r.confidence === null || r.confidence === undefined ? '—' : r.confidence) + '</div>' +
+    '<div class="btn-row" style="margin-top:10px">' +
+      '<button class="btn sm act-save">บันทึกการแก้ไข</button>' +
+      '<button class="btn ' + (topic.approved ? 'ghost' : 'primary') + ' sm act-confirm">' +
+        (topic.approved ? 'ยกเลิกยืนยัน' : 'ยืนยันหัวข้อนี้') + '</button>' +
+      '<button class="btn ghost sm act-viewsrc">ดู Transcript ต้นทาง</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function onSummaryClick(e) {
+  var block = e.target.closest('.sum-block');
+  if (!block) return;
+  var topicNo = block.dataset.topic;
+  if (e.target.classList.contains('act-gen')) genTopic(topicNo, e.target);
+  else if (e.target.classList.contains('act-save')) saveReviewed(topicNo, block, true);
+  else if (e.target.classList.contains('act-confirm')) toggleConfirm(topicNo, block);
+  else if (e.target.classList.contains('act-viewsrc')) viewTopicSource(topicNo);
+}
+
+function collectReviewed(block, topic) {
+  var orig = effResult(topic) || {};
+  var decLines = splitLines($('.f-dec', block).value);
+  var actLines = splitLines($('.f-act', block).value);
+  var qLines = splitLines($('.f-q', block).value);
+  return {
+    agendaNo: orig.agendaNo, agendaTitle: orig.agendaTitle,
+    topicNo: topic.topic_no, topicTitle: topic.topic_title,
+    discussionSummary: $('.f-disc', block).value.trim(),
+    speakerSummaries: $all('.f-spk', block).map(function (ta) {
+      return { speaker: ta.dataset.speaker, keyPoints: splitLines(ta.value), timestamps: [] };
+    }),
+    questions: qLines.map(function (l) { return { question: l }; }),
+    decisions: decLines.map(function (l, i) {
+      var od = (orig.decisions || [])[i] || {};
+      return { decision: l.replace(/\s*\[[^\]]*\]\s*$/, '').trim(), status: od.status || 'explicit',
+        evidenceTimestamps: od.evidenceTimestamps || [] };
+    }),
+    actionItems: actLines.map(function (l, i) {
+      var parts = l.split('|').map(function (x) { return x.trim(); });
+      var oa = (orig.actionItems || [])[i] || {};
+      return { action: parts[0] || '', owner: parts[1] || null, dueText: parts[2] || null,
+        dueDate: oa.dueDate || null, status: oa.status || 'explicit', sourceTimestamp: oa.sourceTimestamp || '' };
+    }),
+    unresolvedIssues: orig.unresolvedIssues || [],
+    confidence: orig.confidence
+  };
+}
+
+function splitLines(s) {
+  return String(s || '').split('\n').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+}
+
+function localTopic(topicNo) {
+  return (AM.job.topics || []).filter(function (t) { return String(t.topic_no) === String(topicNo); })[0];
+}
+
+function genTopic(topicNo, btn) {
+  setBusy(btn, true, 'AI…');
+  return srv('generateTopicSummary', AM.job.job_id, topicNo).then(function (res) {
+    var t = localTopic(topicNo);
+    t.ai_status = res.ai_status;
+    if (res.ai_result) { t.ai_result = res.ai_result; t.user_edited_result = null; t.approved = false; }
+    renderSummary();
+    updateGenerateGate();
+    if (res.ai_status === 'FAILED') toast('หัวข้อ ' + topicNo + ' ล้มเหลว: ' + (res.error || ''), 'err');
+    return res;
+  }).catch(function (e) { setBusy(btn, false); toast(errMsg(e), 'err'); throw e; });
+}
+
+function generateAllTopics() {
+  var pending = (AM.job.topics || []).filter(function (t) { return t.ai_status !== 'COMPLETED'; });
+  if (!pending.length) { toast('ทุกหัวข้อมีสรุปแล้ว', 'ok'); return; }
+  var btn = $('#btnGenAll');
+  setBusy(btn, true, 'กำลังสร้าง…');
+  var i = 0;
+  function next() {
+    if (i >= pending.length) {
+      setBusy(btn, false);
+      toast('สร้างสรุปครบแล้ว', 'ok');
+      return;
+    }
+    var t = pending[i++];
+    $('#aiProgress').textContent = 'กำลังทำหัวข้อ ' + t.topic_no + ' (' + i + '/' + pending.length + ')';
+    genTopic(t.topic_no, null).then(next).catch(function () {
+      // ล้มเหลว: หยุด queue ให้ user แก้/retry เอง (resume ได้)
+      setBusy(btn, false);
+      $('#aiProgress').textContent = 'หยุดที่หัวข้อ ' + t.topic_no + ' — แก้ไขแล้วกดสร้างใหม่ได้';
+    });
+  }
+  next();
+}
+
+function saveReviewed(topicNo, block, notify) {
+  var topic = localTopic(topicNo);
+  var data = collectReviewed(block, topic);
+  topic.user_edited_result = data;
+  return srv('saveReviewedTopic', AM.job.job_id, topicNo, data).then(function () {
+    if (notify) toast('บันทึกการแก้ไขหัวข้อ ' + topicNo + ' แล้ว', 'ok');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function toggleConfirm(topicNo, block) {
+  var topic = localTopic(topicNo);
+  var willApprove = !topic.approved;
+  // บันทึกการแก้ก่อนยืนยัน
+  var save = willApprove ? saveReviewed(topicNo, block, false) : Promise.resolve();
+  save.then(function () {
+    return srv('confirmTopic', AM.job.job_id, topicNo, willApprove);
+  }).then(function (r) {
+    topic.approved = willApprove;
+    renderSummary();
+    updateGenerateGate();
+    if (r.allApproved) toast('ยืนยันครบทุกหัวข้อแล้ว พร้อมสร้างเอกสาร', 'ok');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function viewTopicSource(topicNo) {
+  var rows = ((AM.job.transcript && AM.job.transcript.rows) || []).filter(function (r) {
+    return !r.excluded && String(r.topicKey) === String(topicNo);
+  });
+  var html = rows.map(function (r) {
+    return '<div class="tx-line" style="grid-template-columns:90px 80px 1fr"><div class="tx-time">' + esc(r.timestamp) +
+      '</div><div><b>' + esc(r.speaker) + '</b></div><div>' + esc(r.text) + '</div></div>';
+  }).join('') || '<p class="muted">ไม่มีข้อความในหัวข้อนี้</p>';
+  openModal('<h3>Transcript ต้นทาง — หัวข้อ ' + esc(topicNo) + '</h3>' +
+    '<div style="max-height:60vh;overflow:auto">' + html + '</div>' +
+    '<div class="btn-row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">ปิด</button></div>');
+}
+
+function updateAiProgress() {
+  var topics = AM.job.topics || [];
+  var done = topics.filter(function (t) { return t.ai_status === 'COMPLETED'; }).length;
+  $('#aiProgress').textContent = topics.length ? (done + '/' + topics.length + ' หัวข้อมีสรุป') : '';
+}
+
+function updateGenerateGate() {
+  var topics = AM.job.topics || [];
+  var allApproved = topics.length > 0 && topics.every(function (t) { return t.approved; });
+  var btn = $('#btnGenerateDoc');
+  btn.disabled = !allApproved;
+  $('#generateAlert').innerHTML = allApproved
+    ? '<div class="alert ok">ทุกหัวข้อได้รับการยืนยันแล้ว — พร้อมสร้างเอกสาร</div>'
+    : '<div class="alert warn">ต้องยืนยัน (human review) ทุกหัวข้อก่อนจึงจะสร้างเอกสารได้</div>';
 }
 
 // ---- modal helper ----

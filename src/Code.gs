@@ -32,7 +32,12 @@ function apiBootstrap() {
   return {
     authorized: true,
     user: user,
-    templates: getAvailableTemplates()
+    templates: getAvailableTemplates(),
+    settings: {
+      mock: getBoolConfig_(PROP_KEYS.USE_MOCK_GEMINI),
+      model: getConfig_(PROP_KEYS.GEMINI_MODEL) || CONFIG_DEFAULTS.GEMINI_MODEL,
+      retentionDays: getRetentionDays_()
+    }
   };
 }
 
