@@ -1,0 +1,324 @@
+<!-- app.js.html — client controller (SPA) -->
+<script>
+/* ============================================================
+   Auto Minute — client controller
+   หน้าเว็บเป็น SPA: สลับ .page ด้วย showPage(); เรียก server ผ่าน srv()
+   ============================================================ */
+
+// ---- global state ----
+var AM = {
+  user: null,
+  templates: [],
+  selectedTemplateId: null,
+  job: null,          // meeting job ปัจจุบัน
+  transcriptRows: [], // ผลลัพธ์จาก parser
+  topics: [],         // วาระ/หัวข้อ + ช่วงเวลา
+  split: null,        // ผล split transcript ตามหัวข้อ
+  maxPageReached: 1
+};
+
+var PAGES = ['template-selection', 'meeting-setup', 'agenda-mapping', 'transcript-preview', 'summary-review'];
+
+// ---- server call helper (คืน Promise) ----
+function srv(fnName) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function (err) { reject(err); })
+      [fnName].apply(google.script.run, args);
+  });
+}
+
+// ---- UI helpers ----
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $all(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+function toast(msg, kind) {
+  var t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (kind ? ' ' + kind : '');
+  t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function () { t.hidden = true; }, 3200);
+}
+
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setBusy(el, busy, busyText) {
+  if (!el) return;
+  if (busy) {
+    el.dataset._label = el.textContent;
+    el.disabled = true;
+    el.textContent = busyText || 'กำลังทำงาน…';
+  } else {
+    el.disabled = false;
+    if (el.dataset._label) el.textContent = el.dataset._label;
+  }
+}
+
+// ---- navigation ----
+function pageIndex(name) { return PAGES.indexOf(name) + 1; }
+
+function showPage(name) {
+  $all('.page').forEach(function (p) { p.classList.toggle('active', p.id === 'page-' + name); });
+  $all('#stepper .step').forEach(function (s) {
+    var idx = pageIndex(s.dataset.page);
+    s.classList.toggle('active', s.dataset.page === name);
+    s.disabled = idx > AM.maxPageReached;
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (typeof onEnterPage === 'function') onEnterPage(name);
+}
+
+function unlockUpTo(name) {
+  AM.maxPageReached = Math.max(AM.maxPageReached, pageIndex(name));
+}
+
+function goPage(name) { unlockUpTo(name); showPage(name); }
+
+// ทำงานตอนเข้าแต่ละหน้า (แต่ละ phase เพิ่ม hook ของตัวเอง)
+function onEnterPage(name) {
+  if (name === 'template-selection') renderTemplates();
+  if (name === 'meeting-setup' && typeof onEnterMeetingSetup === 'function') onEnterMeetingSetup();
+  if (name === 'agenda-mapping' && typeof onEnterAgendaMapping === 'function') onEnterAgendaMapping();
+  if (name === 'transcript-preview' && typeof onEnterPreview === 'function') onEnterPreview();
+  if (name === 'summary-review' && typeof onEnterSummary === 'function') onEnterSummary();
+}
+
+// ---- bootstrap ----
+function boot() {
+  srv('apiBootstrap').then(function (data) {
+    $('#appLoading').hidden = true;
+    if (!data || !data.authorized) {
+      $('#authGate').hidden = false;
+      $('#authEmail').textContent = (data && data.user && data.user.email) || 'ของคุณ';
+      return;
+    }
+    AM.user = data.user;
+    AM.templates = data.templates || [];
+    var badge = $('#userBadge');
+    badge.hidden = false;
+    badge.innerHTML = esc(AM.user.email) + ' · <b>' + esc(AM.user.role) + '</b>';
+    $('#stepper').hidden = false;
+    $('#pages').hidden = false;
+    bindStepper();
+    setupTemplateAdmin();
+    showPage('template-selection');
+  }).catch(function (err) {
+    $('#appLoading').hidden = true;
+    $('#authGate').hidden = false;
+    $('#authEmail').textContent = 'เกิดข้อผิดพลาด: ' + errMsg(err);
+  });
+}
+
+function bindStepper() {
+  $all('#stepper .step').forEach(function (s) {
+    s.addEventListener('click', function () {
+      if (pageIndex(s.dataset.page) <= AM.maxPageReached) showPage(s.dataset.page);
+    });
+  });
+}
+
+function errMsg(err) {
+  if (!err) return 'ไม่ทราบสาเหตุ';
+  return err.message || String(err);
+}
+
+// ---- template selection (Phase 2 จะเสริม admin) ----
+function renderTemplates() {
+  var wrap = $('#tplGrid');
+  if (!wrap) return;
+  if (!AM.templates.length) {
+    wrap.innerHTML = '<p class="muted">ยังไม่มี template ในระบบ' +
+      (AM.user.role === 'ADMIN' ? ' — กด “+ สร้าง Template” เพื่อเพิ่ม' : ' (ติดต่อผู้ดูแลระบบ)') + '</p>';
+    return;
+  }
+  wrap.innerHTML = AM.templates.map(function (t) {
+    var sel = t.template_id === AM.selectedTemplateId ? ' selected' : '';
+    return '<div class="tpl-card' + sel + '" data-id="' + esc(t.template_id) + '">' +
+      '<h3>' + esc(t.template_name) + '</h3>' +
+      '<div class="tpl-desc">' + esc(t.description || '—') + '</div>' +
+      '<div class="tpl-meta">' +
+        '<span>วาระ: ' + (t.agenda_count || 0) + '</span>' +
+        '<span>เวอร์ชัน: ' + esc(t.version || '1') + '</span>' +
+        '<span>อัปเดต: ' + esc((t.updated_at || '').slice(0, 10) || '—') + '</span>' +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn primary sm" data-act="select">เลือก Template</button>' +
+        '<button class="btn ghost sm" data-act="preview">ดูรายละเอียด</button>' +
+        (AM.user.role === 'ADMIN' ? '<button class="btn ghost sm" data-act="edit">แก้ไข</button>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  $all('#tplGrid .tpl-card').forEach(function (card) {
+    var id = card.dataset.id;
+    $all('button', card).forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.dataset.act === 'select') selectTemplate(id);
+        else if (b.dataset.act === 'preview') previewTemplate(id);
+        else if (b.dataset.act === 'edit' && typeof openTemplateEditor === 'function') openTemplateEditor(id);
+      });
+    });
+  });
+}
+
+function selectTemplate(id) {
+  AM.selectedTemplateId = id;
+  renderTemplates();
+  // Phase 3 จะสร้าง meeting job ต่อจากตรงนี้
+  if (typeof onTemplateSelected === 'function') onTemplateSelected(id);
+  else goPage('meeting-setup');
+}
+
+function previewTemplate(id) {
+  srv('getTemplateDetails', id).then(function (tpl) {
+    if (typeof showTemplatePreview === 'function') showTemplatePreview(tpl);
+    else alert(tpl.template_name + '\n\n' + (tpl.agendas || []).map(function (a) {
+      return a.agenda_no + '. ' + a.agenda_title;
+    }).join('\n'));
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+// ---- template preview + admin editor (Phase 2) ----
+function setupTemplateAdmin() {
+  if (AM.user.role !== 'ADMIN') return;
+  $('#tplAdminBar').hidden = false;
+  $('#btnNewTemplate').addEventListener('click', function () { openTemplateEditor(null); });
+}
+
+function showTemplatePreview(tpl) {
+  var rows = (tpl.agendas || []).map(function (a) {
+    return '<tr><td style="padding:4px 8px;white-space:nowrap"><b>' + esc(a.agenda_no) + '</b></td>' +
+      '<td style="padding:4px 8px">' + esc(a.agenda_title) +
+      (a.summary_instruction ? '<div class="inline-note">คำสั่งสรุป: ' + esc(a.summary_instruction) + '</div>' : '') +
+      '</td></tr>';
+  }).join('');
+  openModal(
+    '<h3>' + esc(tpl.template_name) + '</h3>' +
+    '<p class="muted">' + esc(tpl.description || '') + '</p>' +
+    '<div class="tpl-meta" style="margin-bottom:10px"><span>เวอร์ชัน: ' + esc(tpl.version) + '</span>' +
+    '<span>เอกสาร: ' + (tpl.google_doc_id ? 'ตั้งค่าแล้ว' : 'ยังไม่ตั้ง') + '</span></div>' +
+    '<table style="width:100%;border-collapse:collapse"><tbody>' + rows + '</tbody></table>' +
+    '<div class="btn-row" style="margin-top:16px;justify-content:flex-end">' +
+    '<button class="btn" onclick="closeModal()">ปิด</button></div>'
+  );
+}
+
+function openTemplateEditor(templateId) {
+  var loading = templateId ? srv('getTemplateDetails', templateId) : Promise.resolve({
+    template_name: '', description: '', google_doc_id: '', agendas: [
+      { agenda_no: '1', agenda_title: '', summary_instruction: '' }
+    ]
+  });
+  loading.then(function (tpl) {
+    AM._editTpl = tpl;
+    AM._editId = templateId;
+    renderTemplateEditor();
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function renderTemplateEditor() {
+  var tpl = AM._editTpl;
+  var agRows = (tpl.agendas || []).map(function (a, i) {
+    return editorAgendaRow(a, i);
+  }).join('');
+  openModal(
+    '<h3>' + (AM._editId ? 'แก้ไข Template' : 'สร้าง Template ใหม่') + '</h3>' +
+    '<label class="field"><span>ชื่อ Template *</span><input type="text" id="edName" value="' + esc(tpl.template_name) + '"></label>' +
+    '<label class="field"><span>คำอธิบาย</span><textarea id="edDesc">' + esc(tpl.description || '') + '</textarea></label>' +
+    '<label class="field"><span>Google Docs Template — วาง URL หรือ Doc ID (ใช้ตอนสร้างเอกสาร)</span>' +
+    '<input type="text" id="edDocId" value="' + esc(tpl.google_doc_id || '') + '" placeholder="ว่างได้ ถ้ายังไม่ผูกเอกสาร"></label>' +
+    '<div style="font-weight:700;margin:10px 0 6px">วาระเริ่มต้น</div>' +
+    '<div id="edAgendas">' + agRows + '</div>' +
+    '<button class="btn ghost sm" id="edAddAgenda" style="margin-top:6px">+ เพิ่มวาระ</button>' +
+    '<div class="btn-row" style="margin-top:18px;justify-content:flex-end">' +
+    '<button class="btn" onclick="closeModal()">ยกเลิก</button>' +
+    '<button class="btn primary" id="edSave">บันทึก</button></div>'
+  );
+  $('#edAddAgenda').addEventListener('click', function () {
+    var idx = $all('#edAgendas .ed-agenda').length;
+    var div = document.createElement('div');
+    div.innerHTML = editorAgendaRow({ agenda_no: String(idx + 1), agenda_title: '', summary_instruction: '' }, idx);
+    $('#edAgendas').appendChild(div.firstChild);
+    bindEditorRowRemovals();
+  });
+  $('#edSave').addEventListener('click', saveTemplateFromEditor);
+  bindEditorRowRemovals();
+}
+
+function editorAgendaRow(a, i) {
+  return '<div class="ed-agenda" style="display:grid;grid-template-columns:60px 1fr auto;gap:6px;margin-bottom:6px;align-items:start">' +
+    '<input type="text" class="ed-no" value="' + esc(a.agenda_no) + '" placeholder="No.">' +
+    '<div><input type="text" class="ed-title" value="' + esc(a.agenda_title) + '" placeholder="ชื่อวาระ">' +
+    '<input type="text" class="ed-instr" value="' + esc(a.summary_instruction || '') + '" placeholder="คำสั่งสรุปสำหรับ AI (ถ้ามี)" style="margin-top:4px"></div>' +
+    '<button class="btn danger sm ed-del" type="button">ลบ</button></div>';
+}
+
+function bindEditorRowRemovals() {
+  $all('#edAgendas .ed-del').forEach(function (b) {
+    b.onclick = function () {
+      if ($all('#edAgendas .ed-agenda').length <= 1) { toast('ต้องมีอย่างน้อย 1 วาระ', 'err'); return; }
+      b.closest('.ed-agenda').remove();
+    };
+  });
+}
+
+function saveTemplateFromEditor() {
+  var name = $('#edName').value.trim();
+  if (!name) { toast('กรุณากรอกชื่อ Template', 'err'); return; }
+  var agendas = $all('#edAgendas .ed-agenda').map(function (row) {
+    return {
+      agenda_no: $('.ed-no', row).value.trim(),
+      agenda_title: $('.ed-title', row).value.trim(),
+      summary_instruction: $('.ed-instr', row).value.trim()
+    };
+  }).filter(function (a) { return a.agenda_title; });
+  if (!agendas.length) { toast('กรุณากรอกวาระอย่างน้อย 1 รายการ', 'err'); return; }
+
+  var payload = {
+    template_name: name,
+    description: $('#edDesc').value.trim(),
+    google_doc_id: $('#edDocId').value.trim(),
+    agendas: agendas
+  };
+  var btn = $('#edSave');
+  setBusy(btn, true, 'กำลังบันทึก…');
+  var call = AM._editId ? srv('updateTemplate', AM._editId, payload) : srv('createTemplate', payload);
+  call.then(function () {
+    return srv('getAvailableTemplates');
+  }).then(function (list) {
+    AM.templates = list;
+    closeModal();
+    renderTemplates();
+    toast('บันทึก Template แล้ว', 'ok');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    toast(errMsg(e), 'err');
+  });
+}
+
+// ---- modal helper ----
+function openModal(html) {
+  closeModal();
+  var bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.id = 'modalBackdrop';
+  bd.innerHTML = '<div class="modal">' + html + '</div>';
+  bd.addEventListener('click', function (e) { if (e.target === bd) closeModal(); });
+  document.body.appendChild(bd);
+  return bd;
+}
+function closeModal() {
+  var m = $('#modalBackdrop');
+  if (m) m.remove();
+}
+
+// start
+window.addEventListener('DOMContentLoaded', boot);
+</script>

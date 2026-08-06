@@ -1,0 +1,31 @@
+<!-- summary-review.html — Page 5 + Generate (Page 6) -->
+<section class="page" id="page-summary-review">
+  <div class="page-title">ตรวจสอบสรุปจาก AI &amp; สร้างเอกสาร</div>
+  <p class="page-desc">AI สรุปทีละหัวข้อ ตรวจแก้ได้ทุกส่วน กด “ยืนยัน” ทุกหัวข้อก่อนจึงสร้างเอกสารได้ (ต้องมี human review เสมอ)</p>
+
+  <div class="card" style="padding:14px 16px">
+    <div class="btn-row between">
+      <div>
+        <button class="btn primary sm" id="btnGenAll">สร้างสรุปทุกหัวข้อ</button>
+        <span class="muted" id="aiProgress" style="margin-left:8px"></span>
+      </div>
+      <span class="muted" id="aiModeNote"></span>
+    </div>
+  </div>
+
+  <div id="summaryList"></div>
+
+  <div class="card" id="generateCard">
+    <h2>สร้าง Google Docs</h2>
+    <p class="card-sub">คัดลอกจาก Template ที่เลือก แล้วแทนที่ placeholder ด้วยเนื้อหาการประชุม (เอกสารจะไม่ถูกแชร์เป็นสาธารณะ)</p>
+    <div id="generateAlert"></div>
+    <div class="btn-row">
+      <button class="btn primary" id="btnGenerateDoc" disabled>สร้างเอกสาร</button>
+      <a class="btn ghost" id="btnOpenDoc" target="_blank" rel="noopener" hidden>เปิดเอกสาร ↗</a>
+    </div>
+  </div>
+
+  <div class="btn-row between">
+    <button class="btn ghost" id="btnBackToPreview">← กลับไปตรวจ Transcript</button>
+  </div>
+</section>

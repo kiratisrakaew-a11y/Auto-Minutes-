@@ -1,0 +1,40 @@
+<!-- meeting-setup.html — Page 2 -->
+<section class="page" id="page-meeting-setup">
+  <div class="page-title">ข้อมูลการประชุม &amp; Transcript</div>
+  <p class="page-desc">กรอกรายละเอียดการประชุม และนำเข้า Transcript (มี speaker + timestamp อยู่แล้ว)</p>
+
+  <div class="card">
+    <h2>ข้อมูลการประชุม</h2>
+    <div class="grid-2">
+      <label class="field"><span>ชื่อการประชุม *</span><input type="text" id="mtTitle" placeholder="เช่น การประชุมคณะกรรมการบริหารความเสี่ยง ครั้งที่ 3/2568"></label>
+      <label class="field"><span>เลขที่อ้างอิง (ถ้ามี)</span><input type="text" id="mtRef" placeholder="เช่น RMC-2568-03"></label>
+      <label class="field"><span>วันที่ประชุม *</span><input type="date" id="mtDate"></label>
+      <label class="field"><span>สถานที่</span><input type="text" id="mtLocation" placeholder="เช่น ห้องประชุม 1 ชั้น 10"></label>
+      <label class="field"><span>เวลาเริ่ม</span><input type="time" id="mtStart"></label>
+      <label class="field"><span>เวลาสิ้นสุด</span><input type="time" id="mtEnd"></label>
+      <label class="field"><span>ประธาน</span><input type="text" id="mtChairman"></label>
+      <label class="field"><span>เลขานุการ</span><input type="text" id="mtSecretary"></label>
+    </div>
+    <label class="field"><span>ผู้เข้าร่วมประชุม</span><textarea id="mtParticipants" placeholder="รายชื่อผู้เข้าร่วม (หนึ่งคนต่อบรรทัด หรือคั่นด้วยจุลภาค)"></textarea></label>
+    <label class="field"><span>URL โฟลเดอร์ Drive สำหรับเก็บเอกสาร (ถ้ามี)</span><input type="url" id="mtFolderUrl" placeholder="วางลิงก์โฟลเดอร์ Google Drive"></label>
+  </div>
+
+  <div class="card">
+    <h2>นำเข้า Transcript</h2>
+    <p class="card-sub">รองรับรูปแบบ <code>[HH:MM:SS] ผู้พูด: ข้อความ</code> หรือ <code>HH:MM:SS ผู้พูด: ข้อความ</code></p>
+    <div class="btn-row" style="margin-bottom:10px">
+      <label class="btn ghost sm" style="cursor:pointer">อัปโหลดไฟล์ .txt
+        <input type="file" id="txFile" accept=".txt,text/plain" hidden>
+      </label>
+      <button class="btn ghost sm" id="btnClearTx">ล้างข้อความ</button>
+      <span class="muted" id="txStat" style="align-self:center"></span>
+    </div>
+    <textarea id="txInput" style="min-height:200px" placeholder="วาง Transcript ที่นี่…"></textarea>
+    <div id="txParseAlert"></div>
+  </div>
+
+  <div class="btn-row between">
+    <button class="btn ghost" id="btnBackToTpl">← กลับไปเลือก Template</button>
+    <button class="btn primary" id="btnParseNext">แปลง Transcript แล้วไปต่อ →</button>
+  </div>
+</section>

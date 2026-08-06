@@ -1,0 +1,56 @@
+<!-- index.html — SPA shell ของ Auto Minute -->
+<?!= include('styles'); ?>
+
+<div id="app">
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark">AM</span>
+      <div>
+        <div class="brand-title">Auto Minute</div>
+        <div class="brand-sub">สร้างรายงานการประชุมอัตโนมัติจาก Transcript</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span id="userBadge" class="user-badge" hidden></span>
+    </div>
+  </header>
+
+  <!-- Stepper -->
+  <nav id="stepper" class="stepper" hidden>
+    <button class="step" data-page="template-selection"><span class="step-no">1</span> เลือก Template</button>
+    <button class="step" data-page="meeting-setup"><span class="step-no">2</span> ข้อมูลประชุม</button>
+    <button class="step" data-page="agenda-mapping"><span class="step-no">3</span> วาระ &amp; หัวข้อ</button>
+    <button class="step" data-page="transcript-preview"><span class="step-no">4</span> ตรวจ Transcript</button>
+    <button class="step" data-page="summary-review"><span class="step-no">5</span> สรุป &amp; เอกสาร</button>
+  </nav>
+
+  <!-- Auth gate -->
+  <div id="authGate" class="auth-gate" hidden>
+    <div class="card auth-card">
+      <h2>ไม่มีสิทธิ์เข้าใช้งาน</h2>
+      <p>บัญชี <b id="authEmail"></b> ยังไม่ได้รับอนุญาตให้ใช้ระบบนี้</p>
+      <p class="muted">กรุณาติดต่อผู้ดูแลระบบเพื่อเพิ่มอีเมลของคุณเข้าสู่รายชื่อผู้ใช้</p>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div id="appLoading" class="app-loading">
+    <div class="spinner"></div>
+    <div>กำลังโหลด…</div>
+  </div>
+
+  <!-- Pages -->
+  <main id="pages" hidden>
+    <?!= include('template-selection'); ?>
+    <?!= include('meeting-setup'); ?>
+    <?!= include('agenda-mapping'); ?>
+    <?!= include('transcript-preview'); ?>
+    <?!= include('summary-review'); ?>
+  </main>
+
+  <!-- Toast -->
+  <div id="toast" class="toast" hidden></div>
+</div>
+
+<?!= include('app.js'); ?>
