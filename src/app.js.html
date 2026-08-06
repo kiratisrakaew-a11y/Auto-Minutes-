@@ -81,6 +81,17 @@ function unlockUpTo(name) {
 
 function goPage(name) { unlockUpTo(name); showPage(name); }
 
+// กันหน้า crash เมื่อ state งานหลุด (เช่น refresh กลางคัน / server คืน null)
+function requireJob_() {
+  if (!AM.job || !AM.job.job_id) {
+    toast('งานหลุดหรือยังไม่ได้เริ่ม — กรุณาเริ่มใหม่จากหน้าเลือก Template', 'err');
+    AM.maxPageReached = 1;
+    showPage('template-selection');
+    return false;
+  }
+  return true;
+}
+
 // ทำงานตอนเข้าแต่ละหน้า (แต่ละ phase เพิ่ม hook ของตัวเอง)
 function onEnterPage(name) {
   if (name === 'template-selection') renderTemplates();
@@ -96,7 +107,8 @@ function boot() {
     $('#appLoading').hidden = true;
     if (!data || !data.authorized) {
       $('#authGate').hidden = false;
-      $('#authEmail').textContent = (data && data.user && data.user.email) || 'ของคุณ';
+      var em = (data && data.email) || '';
+      $('#authEmail').textContent = em || '(ระบบอ่านอีเมลไม่ได้ — ตรวจ Deploy ให้เป็น “Execute as: Me”)';
       return;
     }
     AM.user = data.user;
@@ -157,6 +169,7 @@ function renderTemplates() {
         '<button class="btn primary sm" data-act="select">เลือก Template</button>' +
         '<button class="btn ghost sm" data-act="preview">ดูรายละเอียด</button>' +
         (AM.user.role === 'ADMIN' ? '<button class="btn ghost sm" data-act="edit">แก้ไข</button>' : '') +
+        (AM.user.role === 'ADMIN' ? '<button class="btn danger sm" data-act="disable">ปิดใช้งาน</button>' : '') +
       '</div>' +
     '</div>';
   }).join('');
@@ -168,6 +181,7 @@ function renderTemplates() {
         if (b.dataset.act === 'select') selectTemplate(id);
         else if (b.dataset.act === 'preview') previewTemplate(id);
         else if (b.dataset.act === 'edit' && typeof openTemplateEditor === 'function') openTemplateEditor(id);
+        else if (b.dataset.act === 'disable') disableTemplateUi(id);
       });
     });
   });
@@ -179,6 +193,20 @@ function selectTemplate(id) {
   // Phase 3 จะสร้าง meeting job ต่อจากตรงนี้
   if (typeof onTemplateSelected === 'function') onTemplateSelected(id);
   else goPage('meeting-setup');
+}
+
+function disableTemplateUi(id) {
+  var tpl = (AM.templates || []).filter(function (t) { return t.template_id === id; })[0];
+  var name = tpl ? tpl.template_name : id;
+  if (!window.confirm('ปิดใช้งาน Template “' + name + '”?\n(จะไม่แสดงในรายการ แต่ข้อมูลยังอยู่)')) return;
+  srv('disableTemplate', id).then(function () {
+    return srv('getAvailableTemplates');
+  }).then(function (list) {
+    AM.templates = list;
+    if (AM.selectedTemplateId === id) AM.selectedTemplateId = null;
+    renderTemplates();
+    toast('ปิดใช้งาน Template แล้ว', 'ok');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
 }
 
 function previewTemplate(id) {
@@ -326,10 +354,31 @@ function wireMeetingSetup() {
     var file = ev.target.files[0];
     if (!file) return;
     var reader = new FileReader();
-    reader.onload = function () { $('#txInput').value = reader.result; updateTxStat(); };
-    reader.readAsText(file, 'UTF-8');
+    reader.onload = function () {
+      $('#txInput').value = decodeBytesToText(reader.result);
+      updateTxStat();
+    };
+    reader.readAsArrayBuffer(file); // อ่านเป็น bytes เพื่อตรวจ encoding เอง
   });
   $('#btnParseNext').addEventListener('click', parseAndNext);
+}
+
+// ถอดรหัสไฟล์ .txt ให้รองรับ UTF-8 / UTF-16 (BOM) / Thai ANSI (windows-874)
+function decodeBytesToText(buffer) {
+  var bytes = new Uint8Array(buffer);
+  if (bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF)
+    return new TextDecoder('utf-8').decode(bytes.subarray(3));
+  if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE)
+    return new TextDecoder('utf-16le').decode(bytes.subarray(2));
+  if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF)
+    return new TextDecoder('utf-16be').decode(bytes.subarray(2));
+  // ไม่มี BOM: ลอง UTF-8 แบบเข้มก่อน ถ้าพังค่อย fallback เป็นไทย ANSI
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (e) {
+    try { return new TextDecoder('windows-874').decode(bytes); }
+    catch (e2) { return new TextDecoder('utf-8').decode(bytes); }
+  }
 }
 
 function updateTxStat() {
@@ -434,6 +483,7 @@ function wireAgendaMapping() {
 }
 
 function onEnterAgendaMapping() {
+  if (!requireJob_()) return;
   if (!AM.topics || !AM.topics.length) ensureTopicsFromTemplate();
   var tx = (AM.job && AM.job.transcript) || {};
   $('#txDurationNote').innerHTML = 'ความยาว Transcript ถึง <b>' + esc(tx.maxTimestamp || '—') +
@@ -515,6 +565,7 @@ function syncAgendasFromDom() {
 }
 
 function agendaValidateNext() {
+  if (!requireJob_()) return;
   syncAgendasFromDom();
   var btn = $('#btnValidateNext');
   setBusy(btn, true, 'กำลังตรวจ…');
@@ -522,6 +573,7 @@ function agendaValidateNext() {
     renderValidateAlert(res);
     if (!res.valid) { setBusy(btn, false); toast('มีข้อผิดพลาดของช่วงเวลา', 'err'); return null; }
     return srv('apiSaveTopicsAndSplit', AM.job.job_id, AM.topics).then(function (job) {
+      if (!job || !job.job_id) throw new Error('เซิร์ฟเวอร์ไม่คืนข้อมูลงาน — ลองใหม่อีกครั้ง (ถ้ายังเป็น ให้ลบแท็บ MEETING_JOBS/MEETING_TOPICS แล้วรัน initSpreadsheet)');
       AM.job = job;
       setBusy(btn, false);
       goPage('transcript-preview');
@@ -558,6 +610,7 @@ function wirePreview() {
 }
 
 function onPreviewChange(e) {
+  if (!AM.job || !AM.job.transcript) return;
   if (e.target.classList.contains('px-excl')) {
     e.target.closest('.tx-line').classList.toggle('excluded', e.target.checked);
   }
@@ -569,7 +622,7 @@ function onPreviewChange(e) {
   updatePreviewCounts();
 }
 
-function onEnterPreview() { renderPreview(); }
+function onEnterPreview() { if (!requireJob_()) return; renderPreview(); }
 
 function topicOptionsHtml(selected) {
   var opts = '<option value="">— ไม่จัดเข้าหัวข้อ —</option>';
@@ -582,6 +635,7 @@ function topicOptionsHtml(selected) {
 }
 
 function renderPreview() {
+  if (!AM.job) return;
   var rows = (AM.job.transcript && AM.job.transcript.rows) || [];
   var topics = AM.job.topics || [];
   var byTopic = {};
@@ -589,6 +643,14 @@ function renderPreview() {
     var k = r.topicKey || '__unassigned';
     (byTopic[k] = byTopic[k] || []).push(r);
   });
+
+  var warn = '';
+  var assigned = rows.filter(function (r) { return r.topicKey; }).length;
+  if (!rows.length) {
+    warn = '<div class="alert error">ไม่มี Transcript ในงานนี้ — กลับไปหน้า “ข้อมูลประชุม” เพื่อวาง Transcript ใหม่</div>';
+  } else if (assigned === 0) {
+    warn = '<div class="alert warn">ยังไม่มีบรรทัดใดถูกจัดเข้าหัวข้อ — ตรวจว่าช่วงเวลาในหน้า “วาระ &amp; หัวข้อ” ครอบคลุม timestamp จริง (เริ่มที่ 00:00:00) หรือจัดเข้าหัวข้อเองจาก dropdown ด้านล่างแต่ละบรรทัด</div>';
+  }
 
   var html = topics.map(function (tp) {
     var list = byTopic[tp.topic_no] || [];
@@ -600,7 +662,7 @@ function renderPreview() {
   if ((byTopic.__unassigned || []).length) {
     html += previewTopicBlock('', 'ยังไม่จัดเข้าหัวข้อ', '', byTopic.__unassigned);
   }
-  $('#previewList').innerHTML = html;
+  $('#previewList').innerHTML = warn + html;
   updatePreviewCounts();
 }
 
@@ -656,6 +718,7 @@ function collectPreviewRows() {
 }
 
 function previewSaveNext() {
+  if (!requireJob_()) return;
   var rows = collectPreviewRows();
   AM.job.transcript.rows = rows;
   var btn = $('#btnPreviewNext');
@@ -693,6 +756,7 @@ function generateDocument() {
 }
 
 function onEnterSummary() {
+  if (!requireJob_()) return;
   var s = AM.settings || {};
   $('#aiModeNote').textContent = s.mock ? 'โหมด: MOCK (ยังไม่ยิง Gemini จริง)' : ('โหมด: Gemini · ' + (s.model || ''));
   renderSummary();
