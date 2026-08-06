@@ -120,6 +120,10 @@ function getJobTopics_(jobId) {
   return readWhere_(SHEETS.MEETING_TOPICS, function (t) { return t.job_id === jobId; })
     .sort(function (a, b) { return (a.sort_order || 0) - (b.sort_order || 0); })
     .map(function (t) {
+      // วินาทีคือ source of truth (number) — derive เวลาแสดงผลจากมัน
+      // เพื่อกัน Google Sheets แปลง "00:00:01" เป็นค่า Date แล้วโชว์เพี้ยน
+      var ss = toSecondsNum_(t.start_seconds);
+      var es = toSecondsNum_(t.end_seconds);
       return {
         agenda_no: String(t.agenda_no),
         agenda_title: t.agenda_title || '',
@@ -127,10 +131,10 @@ function getJobTopics_(jobId) {
         topic_no: String(t.topic_no),
         topic_title: t.topic_title,
         note: t.note || '',
-        start_time: t.start_time,
-        end_time: t.end_time,
-        start_seconds: t.start_seconds === '' ? null : Number(t.start_seconds),
-        end_seconds: t.end_seconds === '' ? null : Number(t.end_seconds),
+        start_time: ss !== null ? secondsToTimestamp_(ss) : cellToHms_(t.start_time),
+        end_time: es !== null ? secondsToTimestamp_(es) : cellToHms_(t.end_time),
+        start_seconds: ss,
+        end_seconds: es,
         ai_status: t.ai_status || AI_STATUS.PENDING,
         ai_result: safeJsonParse_(t.ai_result_json, null),
         user_edited_result: safeJsonParse_(t.user_edited_result_json, null),

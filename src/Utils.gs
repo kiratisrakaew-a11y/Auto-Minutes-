@@ -54,6 +54,24 @@ function isValidHms_(ts) {
   return /^\d{1,2}:[0-5]\d:[0-5]\d$/.test(String(ts || '').trim());
 }
 
+/** แปลงค่าวินาทีจากชีต -> number หรือ null (กัน '' / NaN / Date) */
+function toSecondsNum_(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  if (typeof v === 'number') return isNaN(v) ? null : v;
+  var n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
+/** แปลงค่าจากเซลล์เวลา (Date หรือ string) -> 'HH:MM:SS' (ใช้เป็น fallback) */
+function cellToHms_(v) {
+  if (v === null || v === undefined || v === '') return '';
+  if (Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime())) {
+    return pad2_(v.getHours()) + ':' + pad2_(v.getMinutes()) + ':' + pad2_(v.getSeconds());
+  }
+  var s = String(v).trim();
+  return isValidHms_(s) ? s : '';
+}
+
 /** parse JSON แบบปลอดภัย คืน fallback ถ้า error */
 function safeJsonParse_(str, fallback) {
   if (str === null || str === undefined || str === '') {
