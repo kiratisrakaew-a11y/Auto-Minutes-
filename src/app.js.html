@@ -23,10 +23,10 @@ var PAGES = ['template-selection', 'meeting-setup', 'agenda-mapping', 'transcrip
 function srv(fnName) {
   var args = Array.prototype.slice.call(arguments, 1);
   return new Promise(function (resolve, reject) {
-    google.script.run
+    var runner = google.script.run
       .withSuccessHandler(resolve)
-      .withFailureHandler(function (err) { reject(err); })
-      [fnName].apply(google.script.run, args);
+      .withFailureHandler(function (err) { reject(err); });
+    runner[fnName].apply(runner, args);
   });
 }
 
