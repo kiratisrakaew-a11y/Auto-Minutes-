@@ -108,6 +108,10 @@ function boot() {
     $('#pages').hidden = false;
     bindStepper();
     setupTemplateAdmin();
+    wireMeetingSetup();
+    if (typeof wireAgendaMapping === 'function') wireAgendaMapping();
+    if (typeof wirePreview === 'function') wirePreview();
+    if (typeof wireSummary === 'function') wireSummary();
     showPage('template-selection');
   }).catch(function (err) {
     $('#appLoading').hidden = true;
@@ -301,6 +305,367 @@ function saveTemplateFromEditor() {
     setBusy(btn, false);
     toast(errMsg(e), 'err');
   });
+}
+
+// ---- Page 2: meeting setup + transcript (Phase 3) ----
+function onTemplateSelected(id) {
+  srv('getTemplateDetails', id).then(function (tpl) {
+    AM.templateDetails = tpl;
+    goPage('meeting-setup');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function wireMeetingSetup() {
+  $('#btnBackToTpl').addEventListener('click', function () { showPage('template-selection'); });
+  $('#btnClearTx').addEventListener('click', function () {
+    $('#txInput').value = ''; updateTxStat(); $('#txParseAlert').innerHTML = '';
+  });
+  $('#txInput').addEventListener('input', updateTxStat);
+  $('#txFile').addEventListener('change', function (ev) {
+    var file = ev.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { $('#txInput').value = reader.result; updateTxStat(); };
+    reader.readAsText(file, 'UTF-8');
+  });
+  $('#btnParseNext').addEventListener('click', parseAndNext);
+}
+
+function updateTxStat() {
+  var v = $('#txInput').value || '';
+  var lines = v.split('\n').filter(function (l) { return l.trim(); }).length;
+  $('#txStat').textContent = v ? (lines + ' บรรทัด · ' + v.length + ' อักขระ') : '';
+}
+
+function collectMeetingData() {
+  return {
+    template_id: AM.selectedTemplateId,
+    meeting_title: $('#mtTitle').value.trim(),
+    meeting_date: $('#mtDate').value,
+    output_folder_url: $('#mtFolderUrl').value.trim(),
+    meeting_info: {
+      ref_no: $('#mtRef').value.trim(),
+      location: $('#mtLocation').value.trim(),
+      start_time: $('#mtStart').value,
+      end_time: $('#mtEnd').value,
+      chairman: $('#mtChairman').value.trim(),
+      secretary: $('#mtSecretary').value.trim(),
+      participants: $('#mtParticipants').value.trim()
+    }
+  };
+}
+
+function parseAndNext() {
+  var data = collectMeetingData();
+  if (!data.meeting_title) { toast('กรุณากรอกชื่อการประชุม', 'err'); $('#mtTitle').focus(); return; }
+  if (!data.meeting_date) { toast('กรุณาเลือกวันที่ประชุม', 'err'); $('#mtDate').focus(); return; }
+  var raw = $('#txInput').value.trim();
+  if (!raw) { toast('กรุณานำเข้า Transcript ก่อน', 'err'); $('#txInput').focus(); return; }
+
+  var btn = $('#btnParseNext');
+  setBusy(btn, true, 'กำลังแปลง…');
+
+  srv('apiParseTranscript', raw).then(function (parsed) {
+    if (!parsed.count) throw new Error('ไม่พบรายการใน Transcript — ตรวจรูปแบบ [HH:MM:SS] ผู้พูด: ข้อความ');
+    AM.transcriptParsed = parsed;
+    AM.transcriptRows = parsed.rows;
+    // แสดง warning ถ้ามี
+    if (parsed.warnings && parsed.warnings.length) {
+      $('#txParseAlert').innerHTML = '<div class="alert warn">พบข้อสังเกต:<ul>' +
+        parsed.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>';
+    } else {
+      $('#txParseAlert').innerHTML = '<div class="alert ok">แปลงสำเร็จ ' + parsed.count +
+        ' รายการ · ความยาวถึง ' + esc(parsed.maxTimestamp) + '</div>';
+    }
+    // สร้างหรืออัปเดต job
+    var saveTx = { rows: parsed.rows, maxSeconds: parsed.maxSeconds, maxTimestamp: parsed.maxTimestamp };
+    if (!AM.job) {
+      return srv('createMeetingJob', data).then(function (job) {
+        AM.job = job;
+        return srv('saveMeetingDraft', job.job_id,
+          { transcript: saveTx, status: 'TRANSCRIPT_PARSED' });
+      });
+    }
+    return srv('saveMeetingDraft', AM.job.job_id, {
+      meeting_title: data.meeting_title, meeting_date: data.meeting_date,
+      output_folder_url: data.output_folder_url, meeting_info: data.meeting_info,
+      transcript: saveTx, status: 'TRANSCRIPT_PARSED'
+    });
+  }).then(function (job) {
+    AM.job = job;
+    setBusy(btn, false);
+    ensureTopicsFromTemplate();
+    goPage('agenda-mapping');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#txParseAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
+}
+
+// สร้างโครงวาระเริ่มต้นจาก template (ถ้ายังไม่มี topics) — 1 หัวข้อต่อวาระ
+function ensureTopicsFromTemplate() {
+  if (AM.topics && AM.topics.length) return;
+  var ags = (AM.templateDetails && AM.templateDetails.agendas) || [];
+  AM.topics = ags.map(function (a) {
+    return {
+      agenda_no: a.agenda_no,
+      agenda_title: a.agenda_title,
+      summary_instruction: a.summary_instruction || '',
+      topics: [
+        { topic_no: a.agenda_no + '.1', topic_title: a.agenda_title, start_time: '', end_time: '', note: '' }
+      ]
+    };
+  });
+}
+
+// ---- Page 3: agenda / topic mapping (Phase 4) ----
+function wireAgendaMapping() {
+  $('#btnBackToSetup').addEventListener('click', function () { showPage('meeting-setup'); });
+  $('#btnAddAgenda').addEventListener('click', function () {
+    syncAgendasFromDom();
+    var n = String(AM.topics.length + 1);
+    AM.topics.push({ agenda_no: n, agenda_title: '', summary_instruction: '',
+      topics: [{ topic_no: n + '.1', topic_title: '', note: '', start_time: '', end_time: '' }] });
+    renderAgendas();
+  });
+  $('#btnValidateNext').addEventListener('click', agendaValidateNext);
+  $('#agendaList').addEventListener('click', onAgendaListClick);
+}
+
+function onEnterAgendaMapping() {
+  if (!AM.topics || !AM.topics.length) ensureTopicsFromTemplate();
+  var tx = (AM.job && AM.job.transcript) || {};
+  $('#txDurationNote').innerHTML = 'ความยาว Transcript ถึง <b>' + esc(tx.maxTimestamp || '—') +
+    '</b> · จำนวนรายการ: <b>' + ((tx.rows && tx.rows.length) || 0) + '</b>';
+  renderAgendas();
+}
+
+function renderAgendas() {
+  $('#agendaList').innerHTML = AM.topics.map(function (ag, ai) {
+    var topicRows = (ag.topics || []).map(function (tp, ti) {
+      return '<div class="topic-row" data-ai="' + ai + '" data-ti="' + ti + '">' +
+        '<input class="tp-no" value="' + esc(tp.topic_no) + '" placeholder="เลข">' +
+        '<div><input class="tp-title" value="' + esc(tp.topic_title) + '" placeholder="ชื่อหัวข้อ">' +
+        '<input class="tp-note" value="' + esc(tp.note || '') + '" placeholder="หมายเหตุสำหรับ AI (ถ้ามี)" style="margin-top:4px"></div>' +
+        '<input class="tp-start mono" value="' + esc(tp.start_time) + '" placeholder="00:00:00">' +
+        '<input class="tp-end mono" value="' + esc(tp.end_time) + '" placeholder="00:00:00">' +
+        '<button class="btn danger sm tp-del" data-ai="' + ai + '" data-ti="' + ti + '">ลบ</button>' +
+        '</div>';
+    }).join('');
+    return '<div class="agenda-block" data-ai="' + ai + '">' +
+      '<div class="agenda-head">' +
+        '<span class="muted">วาระ</span>' +
+        '<input class="ag-no" value="' + esc(ag.agenda_no) + '" style="width:52px;text-align:center">' +
+        '<input class="ag-title" value="' + esc(ag.agenda_title) + '" placeholder="ชื่อวาระ" style="flex:1">' +
+        '<button class="btn danger sm ag-del" data-ai="' + ai + '">ลบวาระ</button>' +
+      '</div>' +
+      '<div class="topic-head muted" style="display:grid;grid-template-columns:70px 1fr 120px 120px auto;gap:8px;padding:6px 14px;font-size:12px">' +
+        '<span>เลขหัวข้อ</span><span>หัวข้อ / หมายเหตุ</span><span>เริ่ม</span><span>สิ้นสุด</span><span></span></div>' +
+      topicRows +
+      '<div style="padding:8px 14px"><button class="btn ghost sm ag-addtopic" data-ai="' + ai + '">+ เพิ่มหัวข้อ</button></div>' +
+    '</div>';
+  }).join('');
+}
+
+function onAgendaListClick(e) {
+  var t = e.target;
+  if (t.classList.contains('ag-del')) {
+    syncAgendasFromDom();
+    if (AM.topics.length <= 1) { toast('ต้องมีอย่างน้อย 1 วาระ', 'err'); return; }
+    AM.topics.splice(+t.dataset.ai, 1);
+    renderAgendas();
+  } else if (t.classList.contains('ag-addtopic')) {
+    syncAgendasFromDom();
+    var ai = +t.dataset.ai;
+    var ag = AM.topics[ai];
+    var next = ag.agenda_no + '.' + ((ag.topics || []).length + 1);
+    ag.topics.push({ topic_no: next, topic_title: '', note: '', start_time: '', end_time: '' });
+    renderAgendas();
+  } else if (t.classList.contains('tp-del')) {
+    syncAgendasFromDom();
+    var a = +t.dataset.ai, ti = +t.dataset.ti;
+    if (AM.topics[a].topics.length <= 1) { toast('แต่ละวาระต้องมีอย่างน้อย 1 หัวข้อ', 'err'); return; }
+    AM.topics[a].topics.splice(ti, 1);
+    renderAgendas();
+  }
+}
+
+// อ่านค่าจาก DOM กลับเข้า AM.topics (ก่อนแก้โครงสร้างหรือ submit)
+function syncAgendasFromDom() {
+  var blocks = $all('#agendaList .agenda-block');
+  if (!blocks.length) return;
+  AM.topics = blocks.map(function (block, ai) {
+    var existing = AM.topics[ai] || {};
+    return {
+      agenda_no: $('.ag-no', block).value.trim(),
+      agenda_title: $('.ag-title', block).value.trim(),
+      summary_instruction: existing.summary_instruction || '',
+      topics: $all('.topic-row', block).map(function (row) {
+        return {
+          topic_no: $('.tp-no', row).value.trim(),
+          topic_title: $('.tp-title', row).value.trim(),
+          note: $('.tp-note', row).value.trim(),
+          start_time: $('.tp-start', row).value.trim(),
+          end_time: $('.tp-end', row).value.trim()
+        };
+      })
+    };
+  });
+}
+
+function agendaValidateNext() {
+  syncAgendasFromDom();
+  var btn = $('#btnValidateNext');
+  setBusy(btn, true, 'กำลังตรวจ…');
+  srv('apiValidateAgenda', AM.job.job_id, AM.topics).then(function (res) {
+    renderValidateAlert(res);
+    if (!res.valid) { setBusy(btn, false); toast('มีข้อผิดพลาดของช่วงเวลา', 'err'); return null; }
+    return srv('apiSaveTopicsAndSplit', AM.job.job_id, AM.topics).then(function (job) {
+      AM.job = job;
+      setBusy(btn, false);
+      goPage('transcript-preview');
+    });
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#agendaValidateAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
+}
+
+function renderValidateAlert(res) {
+  var html = '';
+  if (res.errors && res.errors.length) {
+    html += '<div class="alert error"><b>ต้องแก้ไข:</b><ul>' +
+      res.errors.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  }
+  var warns = (res.warnings || []).slice();
+  if (res.unassignedCount) warns.push('มี ' + res.unassignedCount + ' รายการ transcript ที่ยังไม่ถูกจัดเข้าหัวข้อใด');
+  if (warns.length) {
+    html += '<div class="alert warn"><b>ข้อสังเกต:</b><ul>' +
+      warns.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  }
+  if (res.valid && !warns.length) html = '<div class="alert ok">ช่วงเวลาถูกต้องครบถ้วน</div>';
+  $('#agendaValidateAlert').innerHTML = html;
+}
+
+// ---- Page 4: transcript preview (Phase 4) ----
+function wirePreview() {
+  $('#btnBackToAgenda').addEventListener('click', function () { showPage('agenda-mapping'); });
+  $('#btnPreviewNext').addEventListener('click', previewSaveNext);
+  // ผูก listener ครั้งเดียว (delegated) กับ container
+  $('#previewList').addEventListener('input', updatePreviewCounts);
+  $('#previewList').addEventListener('change', onPreviewChange);
+}
+
+function onPreviewChange(e) {
+  if (e.target.classList.contains('px-excl')) {
+    e.target.closest('.tx-line').classList.toggle('excluded', e.target.checked);
+  }
+  if (e.target.classList.contains('px-topic')) {
+    // ย้ายข้อความข้ามหัวข้อ = ยึดการแก้ของ user (re-render ทันที)
+    AM.job.transcript.rows = collectPreviewRows();
+    renderPreview();
+  }
+  updatePreviewCounts();
+}
+
+function onEnterPreview() { renderPreview(); }
+
+function topicOptionsHtml(selected) {
+  var opts = '<option value="">— ไม่จัดเข้าหัวข้อ —</option>';
+  (AM.job.topics || []).forEach(function (tp) {
+    var sel = String(tp.topic_no) === String(selected) ? ' selected' : '';
+    opts += '<option value="' + esc(tp.topic_no) + '"' + sel + '>' +
+      esc(tp.topic_no + ' ' + (tp.topic_title || '')) + '</option>';
+  });
+  return opts;
+}
+
+function renderPreview() {
+  var rows = (AM.job.transcript && AM.job.transcript.rows) || [];
+  var topics = AM.job.topics || [];
+  var byTopic = {};
+  rows.forEach(function (r) {
+    var k = r.topicKey || '__unassigned';
+    (byTopic[k] = byTopic[k] || []).push(r);
+  });
+
+  var html = topics.map(function (tp) {
+    var list = byTopic[tp.topic_no] || [];
+    return previewTopicBlock(tp.topic_no,
+      tp.topic_no + ' ' + (tp.topic_title || ''),
+      (tp.start_time || '') + '–' + (tp.end_time || ''), list);
+  }).join('');
+
+  if ((byTopic.__unassigned || []).length) {
+    html += previewTopicBlock('', 'ยังไม่จัดเข้าหัวข้อ', '', byTopic.__unassigned);
+  }
+  $('#previewList').innerHTML = html;
+  updatePreviewCounts();
+}
+
+function previewTopicBlock(topicNo, title, range, list) {
+  var lines = list.map(function (r) {
+    return '<div class="tx-line' + (r.excluded ? ' excluded' : '') + '" data-id="' + r.id + '">' +
+      '<div class="tx-time">' + esc(r.timestamp || '') + '</div>' +
+      '<div class="tx-speaker"><input class="px-speaker" value="' + esc(r.speaker) + '"></div>' +
+      '<div class="tx-text"><textarea class="px-text">' + esc(r.text) + '</textarea>' +
+        '<div style="display:flex;gap:8px;margin-top:4px;align-items:center">' +
+        '<select class="px-topic" style="max-width:220px">' + topicOptionsHtml(r.topicKey) + '</select>' +
+        '<label style="font-size:12.5px;display:flex;gap:4px;align-items:center">' +
+        '<input type="checkbox" class="px-excl"' + (r.excluded ? ' checked' : '') + '> ไม่ส่งให้ AI</label>' +
+        '</div></div>' +
+      '<div class="row-actions"></div>' +
+    '</div>';
+  }).join('') || '<div class="muted" style="padding:10px 14px">— ไม่มีข้อความในช่วงนี้ —</div>';
+
+  return '<div class="sum-block">' +
+    '<div class="sum-head"><div><b>' + esc(title) + '</b>' +
+      (range && range !== '–' ? ' <span class="muted">(' + esc(range) + ')</span>' : '') + '</div>' +
+      '<span class="tx-count" data-topic="' + esc(topicNo) + '"></span></div>' +
+    '<div class="sum-body" style="padding:0">' + lines + '</div></div>';
+}
+
+function updatePreviewCounts() {
+  $all('#previewList .tx-count').forEach(function (span) {
+    var topic = span.dataset.topic;
+    var block = span.closest('.sum-block');
+    var words = 0, chars = 0;
+    $all('.tx-line', block).forEach(function (line) {
+      if ($('.px-excl', line).checked) return;
+      var txt = $('.px-text', line).value || '';
+      chars += txt.trim().length;
+      words += txt.trim() ? txt.trim().split(/\s+/).length : 0;
+    });
+    span.textContent = words + ' คำ · ' + chars + ' อักขระ';
+  });
+}
+
+function collectPreviewRows() {
+  return $all('#previewList .tx-line').map(function (line) {
+    var id = +line.dataset.id;
+    var orig = (AM.job.transcript.rows || []).filter(function (r) { return r.id === id; })[0] || {};
+    return {
+      id: id, timestamp: orig.timestamp, timestampSeconds: orig.timestampSeconds,
+      speaker: $('.px-speaker', line).value,
+      text: $('.px-text', line).value,
+      topicKey: $('.px-topic', line).value || null,
+      excluded: $('.px-excl', line).checked
+    };
+  });
+}
+
+function previewSaveNext() {
+  var rows = collectPreviewRows();
+  AM.job.transcript.rows = rows;
+  var btn = $('#btnPreviewNext');
+  setBusy(btn, true, 'กำลังบันทึก…');
+  srv('apiSavePreview', AM.job.job_id, rows).then(function () {
+    return srv('getMeetingJob', AM.job.job_id);
+  }).then(function (job) {
+    AM.job = job;
+    setBusy(btn, false);
+    goPage('summary-review');
+  }).catch(function (e) { setBusy(btn, false); toast(errMsg(e), 'err'); });
 }
 
 // ---- modal helper ----

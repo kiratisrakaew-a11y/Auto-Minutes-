@@ -46,9 +46,10 @@ var SHEET_HEADERS = {
   TEMPLATE_AGENDAS: ['template_id', 'agenda_no', 'agenda_title',
     'summary_instruction', 'sort_order', 'status'],
   MEETING_JOBS: ['job_id', 'user_email', 'template_id', 'meeting_title',
-    'meeting_date', 'output_folder_url', 'status', 'transcript_json',
-    'output_document_id', 'expires_at', 'created_at', 'updated_at'],
-  MEETING_TOPICS: ['job_id', 'agenda_no', 'topic_no', 'topic_title',
+    'meeting_date', 'output_folder_url', 'status', 'meeting_info_json',
+    'transcript_json', 'output_document_id', 'expires_at', 'created_at', 'updated_at'],
+  MEETING_TOPICS: ['job_id', 'agenda_no', 'agenda_title', 'summary_instruction',
+    'topic_no', 'topic_title', 'note',
     'start_time', 'end_time', 'start_seconds', 'end_seconds', 'ai_status',
     'ai_result_json', 'user_edited_result_json', 'approved', 'sort_order', 'updated_at'],
   AUDIT_LOG: ['timestamp', 'user_email', 'action', 'job_id', 'template_id', 'details']
