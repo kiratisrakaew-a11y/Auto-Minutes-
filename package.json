@@ -1,0 +1,9 @@
+{
+  "name": "auto-minute",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Auto Minute — Google Apps Script Web App สร้างรายงานการประชุมอัตโนมัติจาก Transcript",
+  "scripts": {
+    "test": "node test/run-tests.js"
+  }
+}

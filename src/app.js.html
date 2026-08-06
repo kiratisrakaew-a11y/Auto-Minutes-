@@ -1,0 +1,915 @@
+<!-- app.js.html — client controller (SPA) -->
+<script>
+/* ============================================================
+   Auto Minute — client controller
+   หน้าเว็บเป็น SPA: สลับ .page ด้วย showPage(); เรียก server ผ่าน srv()
+   ============================================================ */
+
+// ---- global state ----
+var AM = {
+  user: null,
+  templates: [],
+  selectedTemplateId: null,
+  job: null,          // meeting job ปัจจุบัน
+  transcriptRows: [], // ผลลัพธ์จาก parser
+  topics: [],         // วาระ/หัวข้อ + ช่วงเวลา
+  split: null,        // ผล split transcript ตามหัวข้อ
+  maxPageReached: 1
+};
+
+var PAGES = ['template-selection', 'meeting-setup', 'agenda-mapping', 'transcript-preview', 'summary-review'];
+
+// ---- server call helper (คืน Promise) ----
+function srv(fnName) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    var runner = google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function (err) { reject(err); });
+    runner[fnName].apply(runner, args);
+  });
+}
+
+// ---- UI helpers ----
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $all(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+function toast(msg, kind) {
+  var t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast' + (kind ? ' ' + kind : '');
+  t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function () { t.hidden = true; }, 3200);
+}
+
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function setBusy(el, busy, busyText) {
+  if (!el) return;
+  if (busy) {
+    el.dataset._label = el.textContent;
+    el.disabled = true;
+    el.textContent = busyText || 'กำลังทำงาน…';
+  } else {
+    el.disabled = false;
+    if (el.dataset._label) el.textContent = el.dataset._label;
+  }
+}
+
+// ---- navigation ----
+function pageIndex(name) { return PAGES.indexOf(name) + 1; }
+
+function showPage(name) {
+  $all('.page').forEach(function (p) { p.classList.toggle('active', p.id === 'page-' + name); });
+  $all('#stepper .step').forEach(function (s) {
+    var idx = pageIndex(s.dataset.page);
+    s.classList.toggle('active', s.dataset.page === name);
+    s.disabled = idx > AM.maxPageReached;
+  });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (typeof onEnterPage === 'function') onEnterPage(name);
+}
+
+function unlockUpTo(name) {
+  AM.maxPageReached = Math.max(AM.maxPageReached, pageIndex(name));
+}
+
+function goPage(name) { unlockUpTo(name); showPage(name); }
+
+// ทำงานตอนเข้าแต่ละหน้า (แต่ละ phase เพิ่ม hook ของตัวเอง)
+function onEnterPage(name) {
+  if (name === 'template-selection') renderTemplates();
+  if (name === 'meeting-setup' && typeof onEnterMeetingSetup === 'function') onEnterMeetingSetup();
+  if (name === 'agenda-mapping' && typeof onEnterAgendaMapping === 'function') onEnterAgendaMapping();
+  if (name === 'transcript-preview' && typeof onEnterPreview === 'function') onEnterPreview();
+  if (name === 'summary-review' && typeof onEnterSummary === 'function') onEnterSummary();
+}
+
+// ---- bootstrap ----
+function boot() {
+  srv('apiBootstrap').then(function (data) {
+    $('#appLoading').hidden = true;
+    if (!data || !data.authorized) {
+      $('#authGate').hidden = false;
+      $('#authEmail').textContent = (data && data.user && data.user.email) || 'ของคุณ';
+      return;
+    }
+    AM.user = data.user;
+    AM.templates = data.templates || [];
+    AM.settings = data.settings || {};
+    var badge = $('#userBadge');
+    badge.hidden = false;
+    badge.innerHTML = esc(AM.user.email) + ' · <b>' + esc(AM.user.role) + '</b>';
+    $('#stepper').hidden = false;
+    $('#pages').hidden = false;
+    bindStepper();
+    setupTemplateAdmin();
+    wireMeetingSetup();
+    if (typeof wireAgendaMapping === 'function') wireAgendaMapping();
+    if (typeof wirePreview === 'function') wirePreview();
+    if (typeof wireSummary === 'function') wireSummary();
+    showPage('template-selection');
+  }).catch(function (err) {
+    $('#appLoading').hidden = true;
+    $('#authGate').hidden = false;
+    $('#authEmail').textContent = 'เกิดข้อผิดพลาด: ' + errMsg(err);
+  });
+}
+
+function bindStepper() {
+  $all('#stepper .step').forEach(function (s) {
+    s.addEventListener('click', function () {
+      if (pageIndex(s.dataset.page) <= AM.maxPageReached) showPage(s.dataset.page);
+    });
+  });
+}
+
+function errMsg(err) {
+  if (!err) return 'ไม่ทราบสาเหตุ';
+  return err.message || String(err);
+}
+
+// ---- template selection (Phase 2 จะเสริม admin) ----
+function renderTemplates() {
+  var wrap = $('#tplGrid');
+  if (!wrap) return;
+  if (!AM.templates.length) {
+    wrap.innerHTML = '<p class="muted">ยังไม่มี template ในระบบ' +
+      (AM.user.role === 'ADMIN' ? ' — กด “+ สร้าง Template” เพื่อเพิ่ม' : ' (ติดต่อผู้ดูแลระบบ)') + '</p>';
+    return;
+  }
+  wrap.innerHTML = AM.templates.map(function (t) {
+    var sel = t.template_id === AM.selectedTemplateId ? ' selected' : '';
+    return '<div class="tpl-card' + sel + '" data-id="' + esc(t.template_id) + '">' +
+      '<h3>' + esc(t.template_name) + '</h3>' +
+      '<div class="tpl-desc">' + esc(t.description || '—') + '</div>' +
+      '<div class="tpl-meta">' +
+        '<span>วาระ: ' + (t.agenda_count || 0) + '</span>' +
+        '<span>เวอร์ชัน: ' + esc(t.version || '1') + '</span>' +
+        '<span>อัปเดต: ' + esc((t.updated_at || '').slice(0, 10) || '—') + '</span>' +
+      '</div>' +
+      '<div class="btn-row">' +
+        '<button class="btn primary sm" data-act="select">เลือก Template</button>' +
+        '<button class="btn ghost sm" data-act="preview">ดูรายละเอียด</button>' +
+        (AM.user.role === 'ADMIN' ? '<button class="btn ghost sm" data-act="edit">แก้ไข</button>' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  $all('#tplGrid .tpl-card').forEach(function (card) {
+    var id = card.dataset.id;
+    $all('button', card).forEach(function (b) {
+      b.addEventListener('click', function () {
+        if (b.dataset.act === 'select') selectTemplate(id);
+        else if (b.dataset.act === 'preview') previewTemplate(id);
+        else if (b.dataset.act === 'edit' && typeof openTemplateEditor === 'function') openTemplateEditor(id);
+      });
+    });
+  });
+}
+
+function selectTemplate(id) {
+  AM.selectedTemplateId = id;
+  renderTemplates();
+  // Phase 3 จะสร้าง meeting job ต่อจากตรงนี้
+  if (typeof onTemplateSelected === 'function') onTemplateSelected(id);
+  else goPage('meeting-setup');
+}
+
+function previewTemplate(id) {
+  srv('getTemplateDetails', id).then(function (tpl) {
+    if (typeof showTemplatePreview === 'function') showTemplatePreview(tpl);
+    else alert(tpl.template_name + '\n\n' + (tpl.agendas || []).map(function (a) {
+      return a.agenda_no + '. ' + a.agenda_title;
+    }).join('\n'));
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+// ---- template preview + admin editor (Phase 2) ----
+function setupTemplateAdmin() {
+  if (AM.user.role !== 'ADMIN') return;
+  $('#tplAdminBar').hidden = false;
+  $('#btnNewTemplate').addEventListener('click', function () { openTemplateEditor(null); });
+}
+
+function showTemplatePreview(tpl) {
+  var rows = (tpl.agendas || []).map(function (a) {
+    return '<tr><td style="padding:4px 8px;white-space:nowrap"><b>' + esc(a.agenda_no) + '</b></td>' +
+      '<td style="padding:4px 8px">' + esc(a.agenda_title) +
+      (a.summary_instruction ? '<div class="inline-note">คำสั่งสรุป: ' + esc(a.summary_instruction) + '</div>' : '') +
+      '</td></tr>';
+  }).join('');
+  openModal(
+    '<h3>' + esc(tpl.template_name) + '</h3>' +
+    '<p class="muted">' + esc(tpl.description || '') + '</p>' +
+    '<div class="tpl-meta" style="margin-bottom:10px"><span>เวอร์ชัน: ' + esc(tpl.version) + '</span>' +
+    '<span>เอกสาร: ' + (tpl.google_doc_id ? 'ตั้งค่าแล้ว' : 'ยังไม่ตั้ง') + '</span></div>' +
+    '<table style="width:100%;border-collapse:collapse"><tbody>' + rows + '</tbody></table>' +
+    '<div class="btn-row" style="margin-top:16px;justify-content:flex-end">' +
+    '<button class="btn" onclick="closeModal()">ปิด</button></div>'
+  );
+}
+
+function openTemplateEditor(templateId) {
+  var loading = templateId ? srv('getTemplateDetails', templateId) : Promise.resolve({
+    template_name: '', description: '', google_doc_id: '', agendas: [
+      { agenda_no: '1', agenda_title: '', summary_instruction: '' }
+    ]
+  });
+  loading.then(function (tpl) {
+    AM._editTpl = tpl;
+    AM._editId = templateId;
+    renderTemplateEditor();
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function renderTemplateEditor() {
+  var tpl = AM._editTpl;
+  var agRows = (tpl.agendas || []).map(function (a, i) {
+    return editorAgendaRow(a, i);
+  }).join('');
+  openModal(
+    '<h3>' + (AM._editId ? 'แก้ไข Template' : 'สร้าง Template ใหม่') + '</h3>' +
+    '<label class="field"><span>ชื่อ Template *</span><input type="text" id="edName" value="' + esc(tpl.template_name) + '"></label>' +
+    '<label class="field"><span>คำอธิบาย</span><textarea id="edDesc">' + esc(tpl.description || '') + '</textarea></label>' +
+    '<label class="field"><span>Google Docs Template — วาง URL หรือ Doc ID (ใช้ตอนสร้างเอกสาร)</span>' +
+    '<input type="text" id="edDocId" value="' + esc(tpl.google_doc_id || '') + '" placeholder="ว่างได้ ถ้ายังไม่ผูกเอกสาร"></label>' +
+    '<div style="font-weight:700;margin:10px 0 6px">วาระเริ่มต้น</div>' +
+    '<div id="edAgendas">' + agRows + '</div>' +
+    '<button class="btn ghost sm" id="edAddAgenda" style="margin-top:6px">+ เพิ่มวาระ</button>' +
+    '<div class="btn-row" style="margin-top:18px;justify-content:flex-end">' +
+    '<button class="btn" onclick="closeModal()">ยกเลิก</button>' +
+    '<button class="btn primary" id="edSave">บันทึก</button></div>'
+  );
+  $('#edAddAgenda').addEventListener('click', function () {
+    var idx = $all('#edAgendas .ed-agenda').length;
+    var div = document.createElement('div');
+    div.innerHTML = editorAgendaRow({ agenda_no: String(idx + 1), agenda_title: '', summary_instruction: '' }, idx);
+    $('#edAgendas').appendChild(div.firstChild);
+    bindEditorRowRemovals();
+  });
+  $('#edSave').addEventListener('click', saveTemplateFromEditor);
+  bindEditorRowRemovals();
+}
+
+function editorAgendaRow(a, i) {
+  return '<div class="ed-agenda" style="display:grid;grid-template-columns:60px 1fr auto;gap:6px;margin-bottom:6px;align-items:start">' +
+    '<input type="text" class="ed-no" value="' + esc(a.agenda_no) + '" placeholder="No.">' +
+    '<div><input type="text" class="ed-title" value="' + esc(a.agenda_title) + '" placeholder="ชื่อวาระ">' +
+    '<input type="text" class="ed-instr" value="' + esc(a.summary_instruction || '') + '" placeholder="คำสั่งสรุปสำหรับ AI (ถ้ามี)" style="margin-top:4px"></div>' +
+    '<button class="btn danger sm ed-del" type="button">ลบ</button></div>';
+}
+
+function bindEditorRowRemovals() {
+  $all('#edAgendas .ed-del').forEach(function (b) {
+    b.onclick = function () {
+      if ($all('#edAgendas .ed-agenda').length <= 1) { toast('ต้องมีอย่างน้อย 1 วาระ', 'err'); return; }
+      b.closest('.ed-agenda').remove();
+    };
+  });
+}
+
+function saveTemplateFromEditor() {
+  var name = $('#edName').value.trim();
+  if (!name) { toast('กรุณากรอกชื่อ Template', 'err'); return; }
+  var agendas = $all('#edAgendas .ed-agenda').map(function (row) {
+    return {
+      agenda_no: $('.ed-no', row).value.trim(),
+      agenda_title: $('.ed-title', row).value.trim(),
+      summary_instruction: $('.ed-instr', row).value.trim()
+    };
+  }).filter(function (a) { return a.agenda_title; });
+  if (!agendas.length) { toast('กรุณากรอกวาระอย่างน้อย 1 รายการ', 'err'); return; }
+
+  var payload = {
+    template_name: name,
+    description: $('#edDesc').value.trim(),
+    google_doc_id: $('#edDocId').value.trim(),
+    agendas: agendas
+  };
+  var btn = $('#edSave');
+  setBusy(btn, true, 'กำลังบันทึก…');
+  var call = AM._editId ? srv('updateTemplate', AM._editId, payload) : srv('createTemplate', payload);
+  call.then(function () {
+    return srv('getAvailableTemplates');
+  }).then(function (list) {
+    AM.templates = list;
+    closeModal();
+    renderTemplates();
+    toast('บันทึก Template แล้ว', 'ok');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    toast(errMsg(e), 'err');
+  });
+}
+
+// ---- Page 2: meeting setup + transcript (Phase 3) ----
+function onTemplateSelected(id) {
+  srv('getTemplateDetails', id).then(function (tpl) {
+    AM.templateDetails = tpl;
+    goPage('meeting-setup');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function wireMeetingSetup() {
+  $('#btnBackToTpl').addEventListener('click', function () { showPage('template-selection'); });
+  $('#btnClearTx').addEventListener('click', function () {
+    $('#txInput').value = ''; updateTxStat(); $('#txParseAlert').innerHTML = '';
+  });
+  $('#txInput').addEventListener('input', updateTxStat);
+  $('#txFile').addEventListener('change', function (ev) {
+    var file = ev.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () { $('#txInput').value = reader.result; updateTxStat(); };
+    reader.readAsText(file, 'UTF-8');
+  });
+  $('#btnParseNext').addEventListener('click', parseAndNext);
+}
+
+function updateTxStat() {
+  var v = $('#txInput').value || '';
+  var lines = v.split('\n').filter(function (l) { return l.trim(); }).length;
+  $('#txStat').textContent = v ? (lines + ' บรรทัด · ' + v.length + ' อักขระ') : '';
+}
+
+function collectMeetingData() {
+  return {
+    template_id: AM.selectedTemplateId,
+    meeting_title: $('#mtTitle').value.trim(),
+    meeting_date: $('#mtDate').value,
+    output_folder_url: $('#mtFolderUrl').value.trim(),
+    meeting_info: {
+      ref_no: $('#mtRef').value.trim(),
+      location: $('#mtLocation').value.trim(),
+      start_time: $('#mtStart').value,
+      end_time: $('#mtEnd').value,
+      chairman: $('#mtChairman').value.trim(),
+      secretary: $('#mtSecretary').value.trim(),
+      participants: $('#mtParticipants').value.trim()
+    }
+  };
+}
+
+function parseAndNext() {
+  var data = collectMeetingData();
+  if (!data.meeting_title) { toast('กรุณากรอกชื่อการประชุม', 'err'); $('#mtTitle').focus(); return; }
+  if (!data.meeting_date) { toast('กรุณาเลือกวันที่ประชุม', 'err'); $('#mtDate').focus(); return; }
+  var raw = $('#txInput').value.trim();
+  if (!raw) { toast('กรุณานำเข้า Transcript ก่อน', 'err'); $('#txInput').focus(); return; }
+
+  var btn = $('#btnParseNext');
+  setBusy(btn, true, 'กำลังแปลง…');
+
+  srv('apiParseTranscript', raw).then(function (parsed) {
+    if (!parsed.count) throw new Error('ไม่พบรายการใน Transcript — ตรวจรูปแบบ [HH:MM:SS] ผู้พูด: ข้อความ');
+    AM.transcriptParsed = parsed;
+    AM.transcriptRows = parsed.rows;
+    // แสดง warning ถ้ามี
+    if (parsed.warnings && parsed.warnings.length) {
+      $('#txParseAlert').innerHTML = '<div class="alert warn">พบข้อสังเกต:<ul>' +
+        parsed.warnings.map(function (w) { return '<li>' + esc(w) + '</li>'; }).join('') + '</ul></div>';
+    } else {
+      $('#txParseAlert').innerHTML = '<div class="alert ok">แปลงสำเร็จ ' + parsed.count +
+        ' รายการ · ความยาวถึง ' + esc(parsed.maxTimestamp) + '</div>';
+    }
+    // สร้างหรืออัปเดต job
+    var saveTx = { rows: parsed.rows, maxSeconds: parsed.maxSeconds, maxTimestamp: parsed.maxTimestamp };
+    if (!AM.job) {
+      return srv('createMeetingJob', data).then(function (job) {
+        AM.job = job;
+        return srv('saveMeetingDraft', job.job_id,
+          { transcript: saveTx, status: 'TRANSCRIPT_PARSED' });
+      });
+    }
+    return srv('saveMeetingDraft', AM.job.job_id, {
+      meeting_title: data.meeting_title, meeting_date: data.meeting_date,
+      output_folder_url: data.output_folder_url, meeting_info: data.meeting_info,
+      transcript: saveTx, status: 'TRANSCRIPT_PARSED'
+    });
+  }).then(function (job) {
+    AM.job = job;
+    setBusy(btn, false);
+    ensureTopicsFromTemplate();
+    goPage('agenda-mapping');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#txParseAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
+}
+
+// สร้างโครงวาระเริ่มต้นจาก template (ถ้ายังไม่มี topics) — 1 หัวข้อต่อวาระ
+function ensureTopicsFromTemplate() {
+  if (AM.topics && AM.topics.length) return;
+  var ags = (AM.templateDetails && AM.templateDetails.agendas) || [];
+  AM.topics = ags.map(function (a) {
+    return {
+      agenda_no: a.agenda_no,
+      agenda_title: a.agenda_title,
+      summary_instruction: a.summary_instruction || '',
+      topics: [
+        { topic_no: a.agenda_no + '.1', topic_title: a.agenda_title, start_time: '', end_time: '', note: '' }
+      ]
+    };
+  });
+}
+
+// ---- Page 3: agenda / topic mapping (Phase 4) ----
+function wireAgendaMapping() {
+  $('#btnBackToSetup').addEventListener('click', function () { showPage('meeting-setup'); });
+  $('#btnAddAgenda').addEventListener('click', function () {
+    syncAgendasFromDom();
+    var n = String(AM.topics.length + 1);
+    AM.topics.push({ agenda_no: n, agenda_title: '', summary_instruction: '',
+      topics: [{ topic_no: n + '.1', topic_title: '', note: '', start_time: '', end_time: '' }] });
+    renderAgendas();
+  });
+  $('#btnValidateNext').addEventListener('click', agendaValidateNext);
+  $('#agendaList').addEventListener('click', onAgendaListClick);
+}
+
+function onEnterAgendaMapping() {
+  if (!AM.topics || !AM.topics.length) ensureTopicsFromTemplate();
+  var tx = (AM.job && AM.job.transcript) || {};
+  $('#txDurationNote').innerHTML = 'ความยาว Transcript ถึง <b>' + esc(tx.maxTimestamp || '—') +
+    '</b> · จำนวนรายการ: <b>' + ((tx.rows && tx.rows.length) || 0) + '</b>';
+  renderAgendas();
+}
+
+function renderAgendas() {
+  $('#agendaList').innerHTML = AM.topics.map(function (ag, ai) {
+    var topicRows = (ag.topics || []).map(function (tp, ti) {
+      return '<div class="topic-row" data-ai="' + ai + '" data-ti="' + ti + '">' +
+        '<input class="tp-no" value="' + esc(tp.topic_no) + '" placeholder="เลข">' +
+        '<div><input class="tp-title" value="' + esc(tp.topic_title) + '" placeholder="ชื่อหัวข้อ">' +
+        '<input class="tp-note" value="' + esc(tp.note || '') + '" placeholder="หมายเหตุสำหรับ AI (ถ้ามี)" style="margin-top:4px"></div>' +
+        '<input class="tp-start mono" value="' + esc(tp.start_time) + '" placeholder="00:00:00">' +
+        '<input class="tp-end mono" value="' + esc(tp.end_time) + '" placeholder="00:00:00">' +
+        '<button class="btn danger sm tp-del" data-ai="' + ai + '" data-ti="' + ti + '">ลบ</button>' +
+        '</div>';
+    }).join('');
+    return '<div class="agenda-block" data-ai="' + ai + '">' +
+      '<div class="agenda-head">' +
+        '<span class="muted">วาระ</span>' +
+        '<input class="ag-no" value="' + esc(ag.agenda_no) + '" style="width:52px;text-align:center">' +
+        '<input class="ag-title" value="' + esc(ag.agenda_title) + '" placeholder="ชื่อวาระ" style="flex:1">' +
+        '<button class="btn danger sm ag-del" data-ai="' + ai + '">ลบวาระ</button>' +
+      '</div>' +
+      '<div class="topic-head muted" style="display:grid;grid-template-columns:70px 1fr 120px 120px auto;gap:8px;padding:6px 14px;font-size:12px">' +
+        '<span>เลขหัวข้อ</span><span>หัวข้อ / หมายเหตุ</span><span>เริ่ม</span><span>สิ้นสุด</span><span></span></div>' +
+      topicRows +
+      '<div style="padding:8px 14px"><button class="btn ghost sm ag-addtopic" data-ai="' + ai + '">+ เพิ่มหัวข้อ</button></div>' +
+    '</div>';
+  }).join('');
+}
+
+function onAgendaListClick(e) {
+  var t = e.target;
+  if (t.classList.contains('ag-del')) {
+    syncAgendasFromDom();
+    if (AM.topics.length <= 1) { toast('ต้องมีอย่างน้อย 1 วาระ', 'err'); return; }
+    AM.topics.splice(+t.dataset.ai, 1);
+    renderAgendas();
+  } else if (t.classList.contains('ag-addtopic')) {
+    syncAgendasFromDom();
+    var ai = +t.dataset.ai;
+    var ag = AM.topics[ai];
+    var next = ag.agenda_no + '.' + ((ag.topics || []).length + 1);
+    ag.topics.push({ topic_no: next, topic_title: '', note: '', start_time: '', end_time: '' });
+    renderAgendas();
+  } else if (t.classList.contains('tp-del')) {
+    syncAgendasFromDom();
+    var a = +t.dataset.ai, ti = +t.dataset.ti;
+    if (AM.topics[a].topics.length <= 1) { toast('แต่ละวาระต้องมีอย่างน้อย 1 หัวข้อ', 'err'); return; }
+    AM.topics[a].topics.splice(ti, 1);
+    renderAgendas();
+  }
+}
+
+// อ่านค่าจาก DOM กลับเข้า AM.topics (ก่อนแก้โครงสร้างหรือ submit)
+function syncAgendasFromDom() {
+  var blocks = $all('#agendaList .agenda-block');
+  if (!blocks.length) return;
+  AM.topics = blocks.map(function (block, ai) {
+    var existing = AM.topics[ai] || {};
+    return {
+      agenda_no: $('.ag-no', block).value.trim(),
+      agenda_title: $('.ag-title', block).value.trim(),
+      summary_instruction: existing.summary_instruction || '',
+      topics: $all('.topic-row', block).map(function (row) {
+        return {
+          topic_no: $('.tp-no', row).value.trim(),
+          topic_title: $('.tp-title', row).value.trim(),
+          note: $('.tp-note', row).value.trim(),
+          start_time: $('.tp-start', row).value.trim(),
+          end_time: $('.tp-end', row).value.trim()
+        };
+      })
+    };
+  });
+}
+
+function agendaValidateNext() {
+  syncAgendasFromDom();
+  var btn = $('#btnValidateNext');
+  setBusy(btn, true, 'กำลังตรวจ…');
+  srv('apiValidateAgenda', AM.job.job_id, AM.topics).then(function (res) {
+    renderValidateAlert(res);
+    if (!res.valid) { setBusy(btn, false); toast('มีข้อผิดพลาดของช่วงเวลา', 'err'); return null; }
+    return srv('apiSaveTopicsAndSplit', AM.job.job_id, AM.topics).then(function (job) {
+      AM.job = job;
+      setBusy(btn, false);
+      goPage('transcript-preview');
+    });
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#agendaValidateAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
+}
+
+function renderValidateAlert(res) {
+  var html = '';
+  if (res.errors && res.errors.length) {
+    html += '<div class="alert error"><b>ต้องแก้ไข:</b><ul>' +
+      res.errors.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  }
+  var warns = (res.warnings || []).slice();
+  if (res.unassignedCount) warns.push('มี ' + res.unassignedCount + ' รายการ transcript ที่ยังไม่ถูกจัดเข้าหัวข้อใด');
+  if (warns.length) {
+    html += '<div class="alert warn"><b>ข้อสังเกต:</b><ul>' +
+      warns.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+  }
+  if (res.valid && !warns.length) html = '<div class="alert ok">ช่วงเวลาถูกต้องครบถ้วน</div>';
+  $('#agendaValidateAlert').innerHTML = html;
+}
+
+// ---- Page 4: transcript preview (Phase 4) ----
+function wirePreview() {
+  $('#btnBackToAgenda').addEventListener('click', function () { showPage('agenda-mapping'); });
+  $('#btnPreviewNext').addEventListener('click', previewSaveNext);
+  // ผูก listener ครั้งเดียว (delegated) กับ container
+  $('#previewList').addEventListener('input', updatePreviewCounts);
+  $('#previewList').addEventListener('change', onPreviewChange);
+}
+
+function onPreviewChange(e) {
+  if (e.target.classList.contains('px-excl')) {
+    e.target.closest('.tx-line').classList.toggle('excluded', e.target.checked);
+  }
+  if (e.target.classList.contains('px-topic')) {
+    // ย้ายข้อความข้ามหัวข้อ = ยึดการแก้ของ user (re-render ทันที)
+    AM.job.transcript.rows = collectPreviewRows();
+    renderPreview();
+  }
+  updatePreviewCounts();
+}
+
+function onEnterPreview() { renderPreview(); }
+
+function topicOptionsHtml(selected) {
+  var opts = '<option value="">— ไม่จัดเข้าหัวข้อ —</option>';
+  (AM.job.topics || []).forEach(function (tp) {
+    var sel = String(tp.topic_no) === String(selected) ? ' selected' : '';
+    opts += '<option value="' + esc(tp.topic_no) + '"' + sel + '>' +
+      esc(tp.topic_no + ' ' + (tp.topic_title || '')) + '</option>';
+  });
+  return opts;
+}
+
+function renderPreview() {
+  var rows = (AM.job.transcript && AM.job.transcript.rows) || [];
+  var topics = AM.job.topics || [];
+  var byTopic = {};
+  rows.forEach(function (r) {
+    var k = r.topicKey || '__unassigned';
+    (byTopic[k] = byTopic[k] || []).push(r);
+  });
+
+  var html = topics.map(function (tp) {
+    var list = byTopic[tp.topic_no] || [];
+    return previewTopicBlock(tp.topic_no,
+      tp.topic_no + ' ' + (tp.topic_title || ''),
+      (tp.start_time || '') + '–' + (tp.end_time || ''), list);
+  }).join('');
+
+  if ((byTopic.__unassigned || []).length) {
+    html += previewTopicBlock('', 'ยังไม่จัดเข้าหัวข้อ', '', byTopic.__unassigned);
+  }
+  $('#previewList').innerHTML = html;
+  updatePreviewCounts();
+}
+
+function previewTopicBlock(topicNo, title, range, list) {
+  var lines = list.map(function (r) {
+    return '<div class="tx-line' + (r.excluded ? ' excluded' : '') + '" data-id="' + r.id + '">' +
+      '<div class="tx-time">' + esc(r.timestamp || '') + '</div>' +
+      '<div class="tx-speaker"><input class="px-speaker" value="' + esc(r.speaker) + '"></div>' +
+      '<div class="tx-text"><textarea class="px-text">' + esc(r.text) + '</textarea>' +
+        '<div style="display:flex;gap:8px;margin-top:4px;align-items:center">' +
+        '<select class="px-topic" style="max-width:220px">' + topicOptionsHtml(r.topicKey) + '</select>' +
+        '<label style="font-size:12.5px;display:flex;gap:4px;align-items:center">' +
+        '<input type="checkbox" class="px-excl"' + (r.excluded ? ' checked' : '') + '> ไม่ส่งให้ AI</label>' +
+        '</div></div>' +
+      '<div class="row-actions"></div>' +
+    '</div>';
+  }).join('') || '<div class="muted" style="padding:10px 14px">— ไม่มีข้อความในช่วงนี้ —</div>';
+
+  return '<div class="sum-block">' +
+    '<div class="sum-head"><div><b>' + esc(title) + '</b>' +
+      (range && range !== '–' ? ' <span class="muted">(' + esc(range) + ')</span>' : '') + '</div>' +
+      '<span class="tx-count" data-topic="' + esc(topicNo) + '"></span></div>' +
+    '<div class="sum-body" style="padding:0">' + lines + '</div></div>';
+}
+
+function updatePreviewCounts() {
+  $all('#previewList .tx-count').forEach(function (span) {
+    var topic = span.dataset.topic;
+    var block = span.closest('.sum-block');
+    var words = 0, chars = 0;
+    $all('.tx-line', block).forEach(function (line) {
+      if ($('.px-excl', line).checked) return;
+      var txt = $('.px-text', line).value || '';
+      chars += txt.trim().length;
+      words += txt.trim() ? txt.trim().split(/\s+/).length : 0;
+    });
+    span.textContent = words + ' คำ · ' + chars + ' อักขระ';
+  });
+}
+
+function collectPreviewRows() {
+  return $all('#previewList .tx-line').map(function (line) {
+    var id = +line.dataset.id;
+    var orig = (AM.job.transcript.rows || []).filter(function (r) { return r.id === id; })[0] || {};
+    return {
+      id: id, timestamp: orig.timestamp, timestampSeconds: orig.timestampSeconds,
+      speaker: $('.px-speaker', line).value,
+      text: $('.px-text', line).value,
+      topicKey: $('.px-topic', line).value || null,
+      excluded: $('.px-excl', line).checked
+    };
+  });
+}
+
+function previewSaveNext() {
+  var rows = collectPreviewRows();
+  AM.job.transcript.rows = rows;
+  var btn = $('#btnPreviewNext');
+  setBusy(btn, true, 'กำลังบันทึก…');
+  srv('apiSavePreview', AM.job.job_id, rows).then(function () {
+    return srv('getMeetingJob', AM.job.job_id);
+  }).then(function (job) {
+    AM.job = job;
+    setBusy(btn, false);
+    goPage('summary-review');
+  }).catch(function (e) { setBusy(btn, false); toast(errMsg(e), 'err'); });
+}
+
+// ---- Page 5: AI summary review + generate (Phase 5) ----
+function wireSummary() {
+  $('#btnBackToPreview').addEventListener('click', function () { showPage('transcript-preview'); });
+  $('#btnGenAll').addEventListener('click', generateAllTopics);
+  $('#summaryList').addEventListener('click', onSummaryClick);
+  $('#btnGenerateDoc').addEventListener('click', generateDocument);
+}
+
+function generateDocument() {
+  var btn = $('#btnGenerateDoc');
+  setBusy(btn, true, 'กำลังสร้างเอกสาร…');
+  srv('generateMeetingDocument', AM.job.job_id).then(function (res) {
+    setBusy(btn, false);
+    var link = $('#btnOpenDoc');
+    link.href = res.url; link.hidden = false;
+    $('#generateAlert').innerHTML = '<div class="alert ok">สร้างเอกสารสำเร็จ — เปิดได้จากปุ่มด้านล่าง</div>';
+    toast('สร้าง Google Docs สำเร็จ', 'ok');
+  }).catch(function (e) {
+    setBusy(btn, false);
+    $('#generateAlert').innerHTML = '<div class="alert error">' + esc(errMsg(e)) + '</div>';
+  });
+}
+
+function onEnterSummary() {
+  var s = AM.settings || {};
+  $('#aiModeNote').textContent = s.mock ? 'โหมด: MOCK (ยังไม่ยิง Gemini จริง)' : ('โหมด: Gemini · ' + (s.model || ''));
+  renderSummary();
+  updateGenerateGate();
+}
+
+function effResult(topic) { return topic.user_edited_result || topic.ai_result || null; }
+
+function renderSummary() {
+  var topics = AM.job.topics || [];
+  $('#summaryList').innerHTML = topics.map(summaryTopicBlock).join('');
+  updateAiProgress();
+}
+
+function summaryTopicBlock(topic) {
+  var st = topic.ai_status || 'PENDING';
+  var pillClass = { PENDING: 'pending', PROCESSING: 'processing', COMPLETED: 'completed', FAILED: 'failed' }[st] || 'pending';
+  var res = effResult(topic);
+  var body = res ? summaryEditor(topic, res) :
+    '<div class="sum-body muted">ยังไม่ได้สร้างสรุป — กด “สร้างสรุป”</div>';
+
+  return '<div class="sum-block" data-topic="' + esc(topic.topic_no) + '">' +
+    '<div class="sum-head">' +
+      '<div><b>' + esc(topic.topic_no + ' ' + (topic.topic_title || '')) + '</b> ' +
+        '<span class="pill ' + pillClass + '">' + esc(st) + '</span>' +
+        (topic.approved ? ' <span class="pill completed">ยืนยันแล้ว</span>' : '') + '</div>' +
+      '<div class="row-actions">' +
+        '<button class="btn ghost sm act-gen">' + (res ? 'สร้างใหม่' : 'สร้างสรุป') + '</button>' +
+      '</div>' +
+    '</div>' + body + '</div>';
+}
+
+function summaryEditor(topic, r) {
+  var spk = (r.speakerSummaries || []).map(function (s, i) {
+    return '<div class="sum-field"><label>ผู้พูด ' + esc(s.speaker) + '</label>' +
+      '<textarea class="f-spk" data-i="' + i + '" data-speaker="' + esc(s.speaker) + '">' +
+      esc((s.keyPoints || []).join('\n')) + '</textarea></div>';
+  }).join('');
+
+  var decisions = (r.decisions || []).map(function (d) {
+    return (d.decision || '') + (d.status ? '  [' + d.status + ']' : '');
+  }).join('\n');
+  var actions = (r.actionItems || []).map(function (a) {
+    return [a.action || '', a.owner || '', a.dueText || a.dueDate || ''].join(' | ');
+  }).join('\n');
+  var questions = (r.questions || []).map(function (q) {
+    return (q.speaker ? q.speaker + ': ' : '') + (q.question || '') + (q.timestamp ? ' (' + q.timestamp + ')' : '');
+  }).join('\n');
+
+  return '<div class="sum-body">' +
+    '<div class="sum-field"><label>สรุปการอภิปราย</label><textarea class="f-disc">' + esc(r.discussionSummary || '') + '</textarea></div>' +
+    spk +
+    '<div class="sum-field"><label>คำถามที่เกิดขึ้น (บรรทัดละ 1 ข้อ)</label><textarea class="f-q">' + esc(questions) + '</textarea></div>' +
+    '<div class="sum-field"><label>มติ / ข้อสรุป (บรรทัดละ 1 มติ)</label><textarea class="f-dec">' + esc(decisions) + '</textarea></div>' +
+    '<div class="sum-field"><label>Action Items (รูปแบบ: งาน | ผู้รับผิดชอบ | กำหนดเวลา)</label><textarea class="f-act">' + esc(actions) + '</textarea></div>' +
+    '<div class="inline-note">confidence: ' + (r.confidence === null || r.confidence === undefined ? '—' : r.confidence) + '</div>' +
+    '<div class="btn-row" style="margin-top:10px">' +
+      '<button class="btn sm act-save">บันทึกการแก้ไข</button>' +
+      '<button class="btn ' + (topic.approved ? 'ghost' : 'primary') + ' sm act-confirm">' +
+        (topic.approved ? 'ยกเลิกยืนยัน' : 'ยืนยันหัวข้อนี้') + '</button>' +
+      '<button class="btn ghost sm act-viewsrc">ดู Transcript ต้นทาง</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function onSummaryClick(e) {
+  var block = e.target.closest('.sum-block');
+  if (!block) return;
+  var topicNo = block.dataset.topic;
+  if (e.target.classList.contains('act-gen')) genTopic(topicNo, e.target);
+  else if (e.target.classList.contains('act-save')) saveReviewed(topicNo, block, true);
+  else if (e.target.classList.contains('act-confirm')) toggleConfirm(topicNo, block);
+  else if (e.target.classList.contains('act-viewsrc')) viewTopicSource(topicNo);
+}
+
+function collectReviewed(block, topic) {
+  var orig = effResult(topic) || {};
+  var decLines = splitLines($('.f-dec', block).value);
+  var actLines = splitLines($('.f-act', block).value);
+  var qLines = splitLines($('.f-q', block).value);
+  return {
+    agendaNo: orig.agendaNo, agendaTitle: orig.agendaTitle,
+    topicNo: topic.topic_no, topicTitle: topic.topic_title,
+    discussionSummary: $('.f-disc', block).value.trim(),
+    speakerSummaries: $all('.f-spk', block).map(function (ta) {
+      return { speaker: ta.dataset.speaker, keyPoints: splitLines(ta.value), timestamps: [] };
+    }),
+    questions: qLines.map(function (l) { return { question: l }; }),
+    decisions: decLines.map(function (l, i) {
+      var od = (orig.decisions || [])[i] || {};
+      return { decision: l.replace(/\s*\[[^\]]*\]\s*$/, '').trim(), status: od.status || 'explicit',
+        evidenceTimestamps: od.evidenceTimestamps || [] };
+    }),
+    actionItems: actLines.map(function (l, i) {
+      var parts = l.split('|').map(function (x) { return x.trim(); });
+      var oa = (orig.actionItems || [])[i] || {};
+      return { action: parts[0] || '', owner: parts[1] || null, dueText: parts[2] || null,
+        dueDate: oa.dueDate || null, status: oa.status || 'explicit', sourceTimestamp: oa.sourceTimestamp || '' };
+    }),
+    unresolvedIssues: orig.unresolvedIssues || [],
+    confidence: orig.confidence
+  };
+}
+
+function splitLines(s) {
+  return String(s || '').split('\n').map(function (x) { return x.trim(); }).filter(function (x) { return x; });
+}
+
+function localTopic(topicNo) {
+  return (AM.job.topics || []).filter(function (t) { return String(t.topic_no) === String(topicNo); })[0];
+}
+
+function genTopic(topicNo, btn) {
+  setBusy(btn, true, 'AI…');
+  return srv('generateTopicSummary', AM.job.job_id, topicNo).then(function (res) {
+    var t = localTopic(topicNo);
+    t.ai_status = res.ai_status;
+    if (res.ai_result) { t.ai_result = res.ai_result; t.user_edited_result = null; t.approved = false; }
+    renderSummary();
+    updateGenerateGate();
+    if (res.ai_status === 'FAILED') toast('หัวข้อ ' + topicNo + ' ล้มเหลว: ' + (res.error || ''), 'err');
+    return res;
+  }).catch(function (e) { setBusy(btn, false); toast(errMsg(e), 'err'); throw e; });
+}
+
+function generateAllTopics() {
+  var pending = (AM.job.topics || []).filter(function (t) { return t.ai_status !== 'COMPLETED'; });
+  if (!pending.length) { toast('ทุกหัวข้อมีสรุปแล้ว', 'ok'); return; }
+  var btn = $('#btnGenAll');
+  setBusy(btn, true, 'กำลังสร้าง…');
+  var i = 0;
+  function next() {
+    if (i >= pending.length) {
+      setBusy(btn, false);
+      toast('สร้างสรุปครบแล้ว', 'ok');
+      return;
+    }
+    var t = pending[i++];
+    $('#aiProgress').textContent = 'กำลังทำหัวข้อ ' + t.topic_no + ' (' + i + '/' + pending.length + ')';
+    genTopic(t.topic_no, null).then(next).catch(function () {
+      // ล้มเหลว: หยุด queue ให้ user แก้/retry เอง (resume ได้)
+      setBusy(btn, false);
+      $('#aiProgress').textContent = 'หยุดที่หัวข้อ ' + t.topic_no + ' — แก้ไขแล้วกดสร้างใหม่ได้';
+    });
+  }
+  next();
+}
+
+function saveReviewed(topicNo, block, notify) {
+  var topic = localTopic(topicNo);
+  var data = collectReviewed(block, topic);
+  topic.user_edited_result = data;
+  return srv('saveReviewedTopic', AM.job.job_id, topicNo, data).then(function () {
+    if (notify) toast('บันทึกการแก้ไขหัวข้อ ' + topicNo + ' แล้ว', 'ok');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function toggleConfirm(topicNo, block) {
+  var topic = localTopic(topicNo);
+  var willApprove = !topic.approved;
+  // บันทึกการแก้ก่อนยืนยัน
+  var save = willApprove ? saveReviewed(topicNo, block, false) : Promise.resolve();
+  save.then(function () {
+    return srv('confirmTopic', AM.job.job_id, topicNo, willApprove);
+  }).then(function (r) {
+    topic.approved = willApprove;
+    renderSummary();
+    updateGenerateGate();
+    if (r.allApproved) toast('ยืนยันครบทุกหัวข้อแล้ว พร้อมสร้างเอกสาร', 'ok');
+  }).catch(function (e) { toast(errMsg(e), 'err'); });
+}
+
+function viewTopicSource(topicNo) {
+  var rows = ((AM.job.transcript && AM.job.transcript.rows) || []).filter(function (r) {
+    return !r.excluded && String(r.topicKey) === String(topicNo);
+  });
+  var html = rows.map(function (r) {
+    return '<div class="tx-line" style="grid-template-columns:90px 80px 1fr"><div class="tx-time">' + esc(r.timestamp) +
+      '</div><div><b>' + esc(r.speaker) + '</b></div><div>' + esc(r.text) + '</div></div>';
+  }).join('') || '<p class="muted">ไม่มีข้อความในหัวข้อนี้</p>';
+  openModal('<h3>Transcript ต้นทาง — หัวข้อ ' + esc(topicNo) + '</h3>' +
+    '<div style="max-height:60vh;overflow:auto">' + html + '</div>' +
+    '<div class="btn-row" style="justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">ปิด</button></div>');
+}
+
+function updateAiProgress() {
+  var topics = AM.job.topics || [];
+  var done = topics.filter(function (t) { return t.ai_status === 'COMPLETED'; }).length;
+  $('#aiProgress').textContent = topics.length ? (done + '/' + topics.length + ' หัวข้อมีสรุป') : '';
+}
+
+function updateGenerateGate() {
+  var topics = AM.job.topics || [];
+  var allApproved = topics.length > 0 && topics.every(function (t) { return t.approved; });
+  var btn = $('#btnGenerateDoc');
+  btn.disabled = !allApproved;
+  $('#generateAlert').innerHTML = allApproved
+    ? '<div class="alert ok">ทุกหัวข้อได้รับการยืนยันแล้ว — พร้อมสร้างเอกสาร</div>'
+    : '<div class="alert warn">ต้องยืนยัน (human review) ทุกหัวข้อก่อนจึงจะสร้างเอกสารได้</div>';
+}
+
+// ---- modal helper ----
+function openModal(html) {
+  closeModal();
+  var bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.id = 'modalBackdrop';
+  bd.innerHTML = '<div class="modal">' + html + '</div>';
+  bd.addEventListener('click', function (e) { if (e.target === bd) closeModal(); });
+  document.body.appendChild(bd);
+  return bd;
+}
+function closeModal() {
+  var m = $('#modalBackdrop');
+  if (m) m.remove();
+}
+
+// start
+window.addEventListener('DOMContentLoaded', boot);
+</script>
