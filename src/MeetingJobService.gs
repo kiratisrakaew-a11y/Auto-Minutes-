@@ -57,7 +57,7 @@ function createMeetingJob(data) {
 function getMeetingJob(jobId) {
   var user = requireUser_();
   var job = loadOwnedJob_(jobId, user);
-  return jobToClient_(job);
+  return jsonSafe_(jobToClient_(job));
 }
 
 /** โหลด job row + ตรวจสิทธิ์เจ้าของ (throw ถ้าไม่ใช่) */

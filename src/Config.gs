@@ -18,8 +18,15 @@ var PROP_KEYS = {
   DEFAULT_OUTPUT_FOLDER_ID: 'DEFAULT_OUTPUT_FOLDER_ID', // โฟลเดอร์ปลายทาง default (ถ้า job ไม่ระบุ)
   ALLOWED_DOMAIN: 'ALLOWED_DOMAIN',      // ว่าง = ปิด domain restriction (ช่วง dev บน gmail ส่วนตัว)
   ADMIN_EMAILS: 'ADMIN_EMAILS',          // รายชื่อ admin seed คั่นด้วย comma
-  RETENTION_DAYS: 'RETENTION_DAYS'       // จำนวนวันเก็บ transcript/ai result (default 1)
+  RETENTION_DAYS: 'RETENTION_DAYS',      // จำนวนวันเก็บ transcript/ai result (default 1)
+  DEV_OPEN: 'DEV_OPEN'                   // 'true' = auto-admit คนแรกเป็น ADMIN (กัน lockout ตอน setup)
 };
+
+/** ค่าที่ถือว่า "ไม่ได้ตั้ง" (กันเคสใส่ - หรือ none) */
+function isBlankConfig_(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim().toLowerCase();
+  return s === '' || s === '-' || s === 'none' || s === 'null';
+}
 
 /** ค่า default เมื่อไม่ได้ตั้งใน Script Properties */
 var CONFIG_DEFAULTS = {

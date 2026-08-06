@@ -26,11 +26,11 @@ function getCurrentUser() {
   var email = getActiveEmail_();
   if (!email) return null;
 
-  // ชั้น 1: domain restriction (ปิดได้ช่วง dev)
+  // ชั้น 1: domain restriction (ปิดได้ช่วง dev; ค่าว่าง/-/none ถือว่าไม่ตั้ง)
   var allowedDomain = getConfig_(PROP_KEYS.ALLOWED_DOMAIN);
-  if (allowedDomain) {
+  if (!isBlankConfig_(allowedDomain)) {
     var domain = email.split('@')[1] || '';
-    if (domain !== allowedDomain.toLowerCase()) {
+    if (domain !== allowedDomain.trim().toLowerCase()) {
       return null;
     }
   }
@@ -40,6 +40,12 @@ function getCurrentUser() {
 
   // auto-seed admin: ถ้า email อยู่ใน ADMIN_EMAILS แต่ยังไม่มีใน sheet -> สร้างให้
   if (!userRow && getSeedAdminEmails_().indexOf(email) !== -1) {
+    upsertUser_(email, ROLES.ADMIN, 'ACTIVE');
+    userRow = findRow_(SHEETS.USERS, 'user_email', email);
+  }
+
+  // DEV_OPEN: กัน lockout ตอน setup — คนแรกที่เข้ามา (ผ่าน domain แล้ว) ได้เป็น ADMIN
+  if (!userRow && getBoolConfig_(PROP_KEYS.DEV_OPEN)) {
     upsertUser_(email, ROLES.ADMIN, 'ACTIVE');
     userRow = findRow_(SHEETS.USERS, 'user_email', email);
   }

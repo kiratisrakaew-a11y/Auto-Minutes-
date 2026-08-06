@@ -220,7 +220,7 @@ function generateTopicSummary(jobId, topicNo) {
       ai_result_json: safeJsonStringify_(result)
     });
     writeAuditLog('AI_SUMMARY', { job_id: jobId, topic: topicNo, rows: rows.length });
-    return { topic_no: String(topicNo), ai_status: AI_STATUS.COMPLETED, ai_result: result };
+    return jsonSafe_({ topic_no: String(topicNo), ai_status: AI_STATUS.COMPLETED, ai_result: result });
   } catch (e) {
     updateTopicRow_(jobId, topicNo, { ai_status: AI_STATUS.FAILED });
     writeAuditLog('AI_SUMMARY_FAILED', { job_id: jobId, topic: topicNo, error: String(e) });

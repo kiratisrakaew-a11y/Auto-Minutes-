@@ -27,7 +27,9 @@ function include(filename) {
 function apiBootstrap() {
   var user = getCurrentUser();
   if (!user) {
-    return { authorized: false, user: null, templates: [] };
+    var detected = '';
+    try { detected = getActiveEmail_(); } catch (e) { detected = ''; }
+    return { authorized: false, user: null, email: detected, templates: [] };
   }
   return {
     authorized: true,

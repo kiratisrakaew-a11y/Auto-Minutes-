@@ -75,6 +75,19 @@ function safeJsonStringify_(obj) {
   }
 }
 
+/**
+ * ทำให้ object ส่งผ่าน google.script.run ได้เสมอ
+ * (JSON.stringify แปลง NaN/Infinity -> null และตัด undefined ทิ้ง)
+ * ป้องกันอาการ client ได้ค่า null ทั้งก้อนเพราะมีค่า non-serializable
+ */
+function jsonSafe_(obj) {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch (e) {
+    return obj;
+  }
+}
+
 /** normalize email เป็นตัวพิมพ์เล็ก + trim */
 function normalizeEmail_(email) {
   return String(email || '').trim().toLowerCase();

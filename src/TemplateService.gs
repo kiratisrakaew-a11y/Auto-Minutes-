@@ -16,7 +16,7 @@ function getAvailableTemplates() {
     return String(t.status).toUpperCase() === 'ACTIVE';
   });
   var agendas = readAll_(SHEETS.TEMPLATE_AGENDAS);
-  return templates.map(function (t) {
+  return jsonSafe_(templates.map(function (t) {
     var count = agendas.filter(function (a) {
       return a.template_id === t.template_id && String(a.status).toUpperCase() !== 'DISABLED';
     }).length;
@@ -29,7 +29,7 @@ function getAvailableTemplates() {
       updated_at: t.updated_at ? String(t.updated_at) : '',
       agenda_count: count
     };
-  });
+  }));
 }
 
 /** รายละเอียด template รวมรายการวาระ (เรียงตาม sort_order) */
@@ -47,7 +47,7 @@ function getTemplateDetails(templateId) {
         summary_instruction: a.summary_instruction
       };
     });
-  return {
+  return jsonSafe_({
     template_id: t.template_id,
     template_name: t.template_name,
     description: t.description,
@@ -56,7 +56,7 @@ function getTemplateDetails(templateId) {
     status: t.status,
     updated_at: t.updated_at ? String(t.updated_at) : '',
     agendas: agendas
-  };
+  });
 }
 
 /**
