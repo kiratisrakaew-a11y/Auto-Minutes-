@@ -634,10 +634,35 @@ function topicOptionsHtml(selected) {
   return opts;
 }
 
+// วินาทีของแถว: ใช้ timestampSeconds ถ้าเป็นเลขจริง ไม่งั้นแปลงจาก timestamp "HH:MM:SS"
+function rowSecs_(r) {
+  if (typeof r.timestampSeconds === 'number' && !isNaN(r.timestampSeconds)) return r.timestampSeconds;
+  var m = String(r.timestamp || '').trim().match(/^(\d{1,2}):([0-5]?\d):([0-5]?\d)$/);
+  return m ? (+m[1] * 3600 + +m[2] * 60 + +m[3]) : null;
+}
+
+// หาหัวข้อที่ครอบคลุมเวลาของแถว (คำนวณฝั่ง client — ไม่พึ่ง topicKey จาก server)
+function computeTopicKey_(r) {
+  var s = rowSecs_(r);
+  if (s === null) return null;
+  var topics = (AM.job && AM.job.topics) || [];
+  for (var i = 0; i < topics.length; i++) {
+    var st = Number(topics[i].start_seconds), en = Number(topics[i].end_seconds);
+    if (!isNaN(st) && !isNaN(en) && st < en && s >= st && s < en) return String(topics[i].topic_no);
+  }
+  return null;
+}
+
 function renderPreview() {
   if (!AM.job) return;
   var rows = (AM.job.transcript && AM.job.transcript.rows) || [];
   var topics = AM.job.topics || [];
+
+  // จับบรรทัดเข้าหัวข้อเองถ้ายังไม่มี topicKey (ทำให้ทำงานได้แม้ server split เพี้ยน)
+  rows.forEach(function (r) {
+    if (!r.topicKey) { var k = computeTopicKey_(r); if (k) r.topicKey = k; }
+  });
+
   var byTopic = {};
   rows.forEach(function (r) {
     var k = r.topicKey || '__unassigned';
@@ -662,7 +687,19 @@ function renderPreview() {
   if ((byTopic.__unassigned || []).length) {
     html += previewTopicBlock('', 'ยังไม่จัดเข้าหัวข้อ', '', byTopic.__unassigned);
   }
-  $('#previewList').innerHTML = warn + html;
+  // 🐞 debug box (ชั่วคราว) — แสดงค่าจริงของ 3 แถวแรก + ช่วงเวลาหัวข้อ
+  var dbgRows = rows.slice(0, 3).map(function (r) {
+    return 'ts="' + esc(r.timestamp) + '" secs=' + JSON.stringify(r.timestampSeconds) +
+      '(' + (typeof r.timestampSeconds) + ') derived=' + rowSecs_(r) + ' key=' + JSON.stringify(r.topicKey);
+  }).join('<br>');
+  var dbgTopics = topics.map(function (t) {
+    return t.topic_no + ': ' + JSON.stringify(t.start_seconds) + '(' + (typeof t.start_seconds) + ')–' +
+      JSON.stringify(t.end_seconds) + '(' + (typeof t.end_seconds) + ')';
+  }).join('<br>');
+  var dbg = '<div style="background:#eef;border:1px solid #99c;padding:8px;font:12px monospace;white-space:pre-wrap;margin-bottom:10px">' +
+    '🐞 DEBUG (ส่งภาพนี้ให้ผม)<br><b>rows:</b><br>' + dbgRows + '<br><b>topics:</b><br>' + dbgTopics + '</div>';
+
+  $('#previewList').innerHTML = dbg + warn + html;
   updatePreviewCounts();
 }
 
