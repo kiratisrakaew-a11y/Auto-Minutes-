@@ -197,11 +197,33 @@ function saveJobTopics_(jobId, flat, normalized) {
   });
 }
 
-/** ดึง transcript rows ของหัวข้อหนึ่ง (ไม่รวม excluded) สำหรับส่งให้ AI */
+/**
+ * ดึง transcript rows ของหัวข้อหนึ่ง (ไม่รวม excluded) สำหรับส่งให้ AI
+ * รับทั้งแถวที่ topicKey ตรง และแถวที่ยังไม่มี topicKey แต่เวลาอยู่ในช่วงของหัวข้อ
+ * (กันเคส server split เก็บ topicKey ไม่ครบ -> AI ได้ transcript ว่าง)
+ */
 function getTopicTranscriptRows_(job, topicNo) {
   var transcript = safeJsonParse_(job.transcript_json, { rows: [] });
-  return (transcript.rows || []).filter(function (r) {
-    return !r.excluded && String(r.topicKey) === String(topicNo);
+  var rows = transcript.rows || [];
+  // หาช่วงเวลาของหัวข้อนี้
+  var st = null, en = null;
+  try {
+    var tr = findTopicRow_(job.job_id, topicNo);
+    st = toSecondsNum_(tr.start_seconds);
+    en = toSecondsNum_(tr.end_seconds);
+  } catch (e) { /* ไม่พบ topic -> ใช้เฉพาะ topicKey */ }
+
+  return rows.filter(function (r) {
+    if (r.excluded) return false;
+    if (String(r.topicKey) === String(topicNo)) return true;
+    // fallback: แถวที่ยังไม่ถูก assign หัวข้อใด + เวลาอยู่ในช่วง
+    var noKey = r.topicKey === null || r.topicKey === undefined || r.topicKey === '';
+    if (noKey && st !== null && en !== null) {
+      var ts = toSecondsNum_(r.timestampSeconds);
+      if (ts === null) ts = timestampToSeconds_(r.timestamp);
+      return ts !== null && ts >= st && ts < en;
+    }
+    return false;
   });
 }
 
