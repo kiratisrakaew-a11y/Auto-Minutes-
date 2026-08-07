@@ -687,19 +687,7 @@ function renderPreview() {
   if ((byTopic.__unassigned || []).length) {
     html += previewTopicBlock('', 'ยังไม่จัดเข้าหัวข้อ', '', byTopic.__unassigned);
   }
-  // 🐞 debug box (ชั่วคราว) — แสดงค่าจริงของ 3 แถวแรก + ช่วงเวลาหัวข้อ
-  var dbgRows = rows.slice(0, 3).map(function (r) {
-    return 'ts="' + esc(r.timestamp) + '" secs=' + JSON.stringify(r.timestampSeconds) +
-      '(' + (typeof r.timestampSeconds) + ') derived=' + rowSecs_(r) + ' key=' + JSON.stringify(r.topicKey);
-  }).join('<br>');
-  var dbgTopics = topics.map(function (t) {
-    return t.topic_no + ': ' + JSON.stringify(t.start_seconds) + '(' + (typeof t.start_seconds) + ')–' +
-      JSON.stringify(t.end_seconds) + '(' + (typeof t.end_seconds) + ')';
-  }).join('<br>');
-  var dbg = '<div style="background:#eef;border:1px solid #99c;padding:8px;font:12px monospace;white-space:pre-wrap;margin-bottom:10px">' +
-    '🐞 DEBUG (ส่งภาพนี้ให้ผม)<br><b>rows:</b><br>' + dbgRows + '<br><b>topics:</b><br>' + dbgTopics + '</div>';
-
-  $('#previewList').innerHTML = dbg + warn + html;
+  $('#previewList').innerHTML = warn + html;
   updatePreviewCounts();
 }
 
