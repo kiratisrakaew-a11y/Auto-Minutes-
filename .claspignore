@@ -1,0 +1,6 @@
+# clasp จะ push เฉพาะไฟล์ใน rootDir (src/) อยู่แล้ว
+# ระบุ pattern เผื่อไว้ให้ push เฉพาะไฟล์ Apps Script จริง ๆ
+**/**
+!appsscript.json
+!**/*.gs
+!**/*.html

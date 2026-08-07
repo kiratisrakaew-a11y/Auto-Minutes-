@@ -40,16 +40,20 @@ function flattenAgendas_(agendas) {
  * @return {Array} rows ใหม่ (clone) พร้อม field topicKey (topic_no ที่ครอบคลุม หรือ null)
  */
 function splitTranscriptByTopic(rows, topics) {
-  var ranges = (topics || []).filter(function (t) {
-    return t.start_seconds !== null && t.start_seconds !== undefined &&
-      t.end_seconds !== null && t.end_seconds !== undefined &&
-      t.start_seconds < t.end_seconds;
-  }).slice().sort(function (a, b) { return a.start_seconds - b.start_seconds; });
+  var ranges = (topics || []).map(function (t) {
+    return {
+      topic_no: t.topic_no,
+      start_seconds: toSecondsNum_(t.start_seconds),
+      end_seconds: toSecondsNum_(t.end_seconds)
+    };
+  }).filter(function (t) {
+    return t.start_seconds !== null && t.end_seconds !== null && t.start_seconds < t.end_seconds;
+  }).sort(function (a, b) { return a.start_seconds - b.start_seconds; });
 
   return (rows || []).map(function (r) {
     var key = null;
-    var ts = r.timestampSeconds;
-    if (ts !== null && ts !== undefined) {
+    var ts = toSecondsNum_(r.timestampSeconds);
+    if (ts !== null) {
       for (var i = 0; i < ranges.length; i++) {
         if (ts >= ranges[i].start_seconds && ts < ranges[i].end_seconds) {
           key = String(ranges[i].topic_no);
