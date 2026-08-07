@@ -35,11 +35,18 @@ function apiBootstrap() {
     authorized: true,
     user: user,
     templates: getAvailableTemplates(),
-    settings: {
-      mock: getBoolConfig_(PROP_KEYS.USE_MOCK_GEMINI),
-      model: getConfig_(PROP_KEYS.GEMINI_MODEL) || CONFIG_DEFAULTS.GEMINI_MODEL,
-      retentionDays: getRetentionDays_()
-    }
+    settings: (function () {
+      var provider = String(getConfig_(PROP_KEYS.AI_PROVIDER) || CONFIG_DEFAULTS.AI_PROVIDER).toLowerCase();
+      var model = provider === 'openai'
+        ? getConfig_(PROP_KEYS.OPENAI_MODEL)
+        : (getConfig_(PROP_KEYS.GEMINI_MODEL) || CONFIG_DEFAULTS.GEMINI_MODEL);
+      return {
+        mock: getBoolConfig_(PROP_KEYS.USE_MOCK_GEMINI),
+        provider: provider,
+        model: model,
+        retentionDays: getRetentionDays_()
+      };
+    })()
   };
 }
 

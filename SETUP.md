@@ -132,6 +132,23 @@
 
 ---
 
+## 7.1 ใช้ AI แบบ OpenAI-compatible (เช่น OKMD/KKU) แทน Gemini
+
+ถ้ามี API ที่เป็น OpenAI-compatible (base_url + key แบบ `sk_...`) เช่น OKMD AI Playground:
+
+ตั้ง Script Properties เพิ่ม:
+| Property | ค่า |
+|---|---|
+| `AI_PROVIDER` | `openai` |
+| `OPENAI_BASE_URL` | `https://gen.ai.kku.ac.th/okmd/api/v1` (base_url ของ provider) |
+| `OPENAI_API_KEY` | `sk_...` (กด Copy จากหน้า provider) |
+| `OPENAI_MODEL` | ชื่อโมเดล — **ดูจากแท็บ Models** ของ provider (เช่น `gpt-4o-mini`, ฯลฯ) |
+| `USE_MOCK_GEMINI` | `false` |
+
+ระบบจะยิงไปที่ `{OPENAI_BASE_URL}/chat/completions` (auth `Bearer`) ใช้ prompt/schema เดียวกับ Gemini
+- กลับไปใช้ Gemini: ตั้ง `AI_PROVIDER=gemini` (หรือลบ property นี้)
+- ทดสอบฟรีไม่ยิง API: `USE_MOCK_GEMINI=true`
+
 ## 8. ทดสอบตาม Acceptance Criteria
 
 ใช้ `examples/sample-transcript.txt` ทดสอบ flow:
