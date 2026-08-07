@@ -1,0 +1,47 @@
+name: Deploy to Apps Script (clasp push)
+
+# ดัน src/ ขึ้น Apps Script ทุกครั้งที่ push เข้า main (หรือกดรันมือจากแท็บ Actions)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '.clasp.json'
+      - '.claspignore'
+      - '.github/workflows/clasp-push.yml'
+  workflow_dispatch: {}
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@2.4.2
+
+      - name: Write clasp credentials
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::ยังไม่ได้ตั้ง GitHub Secret ชื่อ CLASPRC_JSON (ดู CLASP.md)"
+            exit 1
+          fi
+          printf '%s' "$CLASPRC_JSON" > "$HOME/.clasprc.json"
+
+      - name: Verify scriptId is set
+        run: |
+          if grep -q 'PASTE_YOUR_SCRIPT_ID_HERE' .clasp.json; then
+            echo "::error::ยังไม่ได้ใส่ scriptId ใน .clasp.json (ดู CLASP.md)"
+            exit 1
+          fi
+
+      - name: Push to Apps Script
+        run: clasp push --force
