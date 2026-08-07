@@ -52,7 +52,9 @@ function splitTranscriptByTopic(rows, topics) {
 
   return (rows || []).map(function (r) {
     var key = null;
+    // timestampSeconds เป็นตัวตั้ง; ถ้าใช้ไม่ได้ (null/เพี้ยน) derive จาก timestamp string
     var ts = toSecondsNum_(r.timestampSeconds);
+    if (ts === null) ts = timestampToSeconds_(r.timestamp);
     if (ts !== null) {
       for (var i = 0; i < ranges.length; i++) {
         if (ts >= ranges[i].start_seconds && ts < ranges[i].end_seconds) {
