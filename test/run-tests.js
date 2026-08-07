@@ -138,6 +138,19 @@ eq(split[2].topicKey, '2.1', 'row at 540s -> 2.1');
 eq(split[3].topicKey, null, 'row at 3000s -> unassigned');
 ok(split[0].excluded === false, 'default not excluded');
 
+section('splitTranscriptByTopic — fallback when timestampSeconds is bad');
+const rowsBadSecs = [
+  { id: 0, timestamp: '00:00:05', timestampSeconds: null, speaker: '1', text: 'a' },   // null -> derive
+  { id: 1, timestamp: '00:00:10', timestampSeconds: '00:00:10', speaker: '2', text: 'b' }, // string -> derive
+  { id: 2, timestamp: '00:09:00', timestampSeconds: undefined, speaker: '3', text: 'c' }  // undefined -> derive
+];
+const normFb = [{ topic_no: '1.1', start_seconds: 0, end_seconds: 300 }, { topic_no: '2.1', start_seconds: 300, end_seconds: 600 }];
+const splitFb = ctx.splitTranscriptByTopic(rowsBadSecs, normFb);
+eq(splitFb[0].topicKey, '1.1', 'null timestampSeconds -> derived from "00:00:05" -> 1.1');
+eq(splitFb[1].topicKey, '1.1', 'string timestampSeconds -> derived from "00:00:10" -> 1.1');
+eq(splitFb[2].topicKey, '2.1', 'undefined timestampSeconds -> derived from "00:09:00" -> 2.1');
+eq(splitFb[0].timestampSeconds, 5, 'derived seconds stored back');
+
 section('findUnassignedRows');
 const unassigned = ctx.findUnassignedRows(rows, norm);
 eq(unassigned.length, 1, '1 unassigned row');

@@ -71,9 +71,12 @@ function findUnassignedRows(transcriptRows, normalizedTopics) {
     return r.start_seconds !== null && r.end_seconds !== null;
   });
   return (transcriptRows || []).filter(function (row) {
-    if (row.timestampSeconds === null || row.timestampSeconds === undefined) return false;
+    // ใช้ timestampSeconds ถ้าใช้ได้ ไม่งั้น derive จาก timestamp string
+    var ts = toSecondsNum_(row.timestampSeconds);
+    if (ts === null) ts = timestampToSeconds_(row.timestamp);
+    if (ts === null) return false; // ไม่มีเวลาเลย ไม่นับ
     var covered = ranges.some(function (r) {
-      return row.timestampSeconds >= r.start_seconds && row.timestampSeconds < r.end_seconds;
+      return ts >= r.start_seconds && ts < r.end_seconds;
     });
     return !covered;
   });
