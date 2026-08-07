@@ -19,7 +19,12 @@ var PROP_KEYS = {
   ALLOWED_DOMAIN: 'ALLOWED_DOMAIN',      // ว่าง = ปิด domain restriction (ช่วง dev บน gmail ส่วนตัว)
   ADMIN_EMAILS: 'ADMIN_EMAILS',          // รายชื่อ admin seed คั่นด้วย comma
   RETENTION_DAYS: 'RETENTION_DAYS',      // จำนวนวันเก็บ transcript/ai result (default 1)
-  DEV_OPEN: 'DEV_OPEN'                   // 'true' = auto-admit คนแรกเป็น ADMIN (กัน lockout ตอน setup)
+  DEV_OPEN: 'DEV_OPEN',                  // 'true' = auto-admit คนแรกเป็น ADMIN (กัน lockout ตอน setup)
+  // ---- AI provider ----
+  AI_PROVIDER: 'AI_PROVIDER',            // 'gemini' (default) | 'openai' (OpenAI-compatible เช่น OKMD/KKU)
+  OPENAI_BASE_URL: 'OPENAI_BASE_URL',    // เช่น https://gen.ai.kku.ac.th/okmd/api/v1
+  OPENAI_API_KEY: 'OPENAI_API_KEY',      // key ของ provider (sk_...)
+  OPENAI_MODEL: 'OPENAI_MODEL'           // ชื่อโมเดล (ดูจากแท็บ Models ของ provider)
 };
 
 /** ค่าที่ถือว่า "ไม่ได้ตั้ง" (กันเคสใส่ - หรือ none) */
@@ -32,7 +37,8 @@ function isBlankConfig_(v) {
 var CONFIG_DEFAULTS = {
   GEMINI_MODEL: 'gemini-2.0-flash',
   USE_MOCK_GEMINI: 'true',
-  RETENTION_DAYS: '1'
+  RETENTION_DAYS: '1',
+  AI_PROVIDER: 'gemini'
 };
 
 /** ชื่อ sheet ที่ใช้เป็นตารางใน DB */

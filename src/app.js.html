@@ -783,7 +783,9 @@ function generateDocument() {
 function onEnterSummary() {
   if (!requireJob_()) return;
   var s = AM.settings || {};
-  $('#aiModeNote').textContent = s.mock ? 'โหมด: MOCK (ยังไม่ยิง Gemini จริง)' : ('โหมด: Gemini · ' + (s.model || ''));
+  $('#aiModeNote').textContent = s.mock
+    ? 'โหมด: MOCK (ยังไม่ยิง AI จริง)'
+    : ('โหมด: ' + (s.provider === 'openai' ? 'OpenAI-compatible' : 'Gemini') + ' · ' + (s.model || ''));
   renderSummary();
   updateGenerateGate();
 }

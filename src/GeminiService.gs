@@ -21,6 +21,11 @@ function geminiSummarizeTopic_(topicMeta, rows) {
   if (getBoolConfig_(PROP_KEYS.USE_MOCK_GEMINI)) {
     return mockSummarize_(topicMeta, rows);
   }
+  // เลือก provider — 'openai' = OpenAI-compatible (เช่น OKMD/KKU)
+  var provider = String(getConfig_(PROP_KEYS.AI_PROVIDER) || CONFIG_DEFAULTS.AI_PROVIDER).toLowerCase();
+  if (provider === 'openai') {
+    return openaiSummarizeTopic_(topicMeta, rows);
+  }
   var apiKey = getConfig_(PROP_KEYS.GEMINI_API_KEY);
   if (!apiKey) throw new Error('ยังไม่ได้ตั้งค่า GEMINI_API_KEY (หรือเปิด USE_MOCK_GEMINI=true เพื่อทดสอบ)');
   var model = getConfig_(PROP_KEYS.GEMINI_MODEL) || CONFIG_DEFAULTS.GEMINI_MODEL;
@@ -56,6 +61,68 @@ function geminiSummarizeTopic_(topicMeta, rows) {
     }
   }
   throw new Error('AI ประมวลผลไม่สำเร็จหลังลองซ้ำ: ' + (lastErr && lastErr.message));
+}
+
+/**
+ * สรุปหัวข้อผ่าน OpenAI-compatible API (เช่น OKMD/KKU)
+ * POST {base}/chat/completions, Authorization: Bearer <key>
+ */
+function openaiSummarizeTopic_(topicMeta, rows) {
+  var base = String(getConfig_(PROP_KEYS.OPENAI_BASE_URL) || '').replace(/\/+$/, '');
+  var apiKey = getConfig_(PROP_KEYS.OPENAI_API_KEY);
+  var model = getConfig_(PROP_KEYS.OPENAI_MODEL);
+  if (!base) throw new Error('ยังไม่ได้ตั้งค่า OPENAI_BASE_URL');
+  if (!apiKey) throw new Error('ยังไม่ได้ตั้งค่า OPENAI_API_KEY');
+  if (!model) throw new Error('ยังไม่ได้ตั้งค่า OPENAI_MODEL (ดูชื่อโมเดลจากแท็บ Models ของ provider)');
+
+  var prompt = buildTopicPrompt_(topicMeta, rows);
+  var payload = {
+    model: model,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: 'คุณเป็นเลขานุการมืออาชีพ ตอบเป็น JSON ตาม schema ที่ผู้ใช้กำหนดเท่านั้น' },
+      { role: 'user', content: prompt }
+    ]
+  };
+  var options = {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + apiKey },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  var url = base + '/chat/completions';
+  var lastErr = null;
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      var resp = UrlFetchApp.fetch(url, options);
+      var code = resp.getResponseCode();
+      var body = resp.getContentText();
+      if (code < 200 || code >= 300) {
+        throw new Error('AI API error ' + code + ': ' + body.slice(0, 300));
+      }
+      var data = JSON.parse(body);
+      var textOut = extractOpenaiText_(data);
+      var parsed = parseAiJson_(textOut);
+      return normalizeAiResult_(parsed, topicMeta);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw new Error('AI ประมวลผลไม่สำเร็จหลังลองซ้ำ: ' + (lastErr && lastErr.message));
+}
+
+/** ดึงข้อความจาก response ของ OpenAI-compatible */
+function extractOpenaiText_(data) {
+  if (!data || !data.choices || !data.choices.length) {
+    throw new Error('AI ไม่คืนผลลัพธ์ (choices ว่าง)');
+  }
+  var msg = data.choices[0].message;
+  var text = msg && (typeof msg.content === 'string' ? msg.content
+    : (Array.isArray(msg.content) ? msg.content.map(function (p) { return p.text || ''; }).join('') : ''));
+  if (!text) throw new Error('AI คืนผลลัพธ์ว่าง');
+  return text;
 }
 
 /** ดึงข้อความจาก response ของ Gemini */
