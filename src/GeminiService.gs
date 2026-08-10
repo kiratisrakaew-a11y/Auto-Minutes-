@@ -144,8 +144,7 @@ function buildTopicPrompt_(topicMeta, rows) {
   var schema = [
     '{',
     '  "discussionSummary": string,',
-    '  "speakerSummaries": [ { "speaker": string, "keyPoints": [string], "timestamps": [string] } ],',
-    '  "questions": [ { "speaker": string, "question": string, "timestamp": string } ],',
+    '  "questions": [ { "speaker": string, "question": string, "answer": string, "timestamp": string } ],',
     '  "decisions": [ { "decision": string, "status": "explicit"|"inferred"|"unknown", "evidenceTimestamps": [string] } ],',
     '  "actionItems": [ { "action": string, "owner": string|null, "dueDate": string|null, "dueText": string|null, "status": "explicit"|"inferred"|"unknown", "sourceTimestamp": string } ],',
     '  "unresolvedIssues": [string],',
@@ -165,15 +164,16 @@ function buildTopicPrompt_(topicMeta, rows) {
     'กติกาสำคัญ (ต้องปฏิบัติเคร่งครัด):',
     '1. สรุปเฉพาะ transcript ของหัวข้อนี้เท่านั้น ห้ามเพิ่มข้อมูลจากภายนอก',
     '2. ใช้ภาษาไทยเชิงธุรกิจ เป็นทางการ',
-    '3. แยกสาระสำคัญตามผู้พูด (speaker)',
-    '4. ระบุ "มติ" (decision) เฉพาะเมื่อมีหลักฐานชัดเจนในบทสนทนา',
+    '3. "discussionSummary" ต้องเป็นบทสรุปการอภิปรายที่ครบถ้วนในตัวเอง (ไม่ต้องแยกรายผู้พูด)',
+    '4. ระบุ "มติที่ประชุม" (decision) เฉพาะเมื่อมีหลักฐานชัดเจนในบทสนทนา',
     '5. ระบุ action item เฉพาะเมื่อมีการมอบหมายงานจริง',
     '6. ห้ามเดาชื่อผู้รับผิดชอบ (owner) — ถ้าไม่ระบุชัด ให้ใช้ null',
     '7. ห้ามเดากำหนดเวลา (dueDate) — ถ้าไม่มีวันที่ชัดเจนให้ใช้ null และใส่ข้อความกำหนดเวลาไว้ที่ dueText',
-    '8. หากไม่มีข้อมูลในช่องใด ให้คืนค่า array ว่าง หรือ null ตามชนิดข้อมูล',
-    '9. เก็บ timestamp ของหลักฐานสำหรับทุก decision และ action item',
-    '10. แยกสถานะ (status) เป็น explicit / inferred / unknown',
-    '11. ตอบเป็น JSON ตาม schema นี้เท่านั้น ห้ามมีข้อความอื่นหรือ markdown',
+    '8. สำหรับแต่ละคำถาม (questions) ให้ดึง "คำชี้แจง/คำตอบ" ที่มีในบทสนทนามาใส่ field "answer"; ถ้าไม่มีการชี้แจงให้ใช้ ""',
+    '9. หากไม่มีข้อมูลในช่องใด ให้คืนค่า array ว่าง หรือ null ตามชนิดข้อมูล',
+    '10. เก็บ timestamp ของหลักฐานสำหรับทุก decision และ action item',
+    '11. แยกสถานะ (status) เป็น explicit / inferred / unknown',
+    '12. ตอบเป็น JSON ตาม schema นี้เท่านั้น ห้ามมีข้อความอื่นหรือ markdown',
     '',
     'JSON schema:',
     schema,
@@ -210,7 +210,6 @@ function normalizeAiResult_(r, topicMeta) {
     topicNo: topicMeta.topic_no || '',
     topicTitle: topicMeta.topic_title || '',
     discussionSummary: r.discussionSummary || '',
-    speakerSummaries: Array.isArray(r.speakerSummaries) ? r.speakerSummaries : [],
     questions: Array.isArray(r.questions) ? r.questions : [],
     decisions: Array.isArray(r.decisions) ? r.decisions : [],
     actionItems: Array.isArray(r.actionItems) ? r.actionItems : [],
@@ -222,19 +221,13 @@ function normalizeAiResult_(r, topicMeta) {
 /** mock summarizer — สร้างผลลัพธ์ตาม schema จาก rows จริง (deterministic) */
 function mockSummarize_(topicMeta, rows) {
   rows = rows || [];
-  var speakers = {};
-  rows.forEach(function (r) {
-    var s = r.speaker || '?';
-    if (!speakers[s]) speakers[s] = { speaker: s, keyPoints: [], timestamps: [] };
-    speakers[s].keyPoints.push((r.text || '').slice(0, 120));
-    speakers[s].timestamps.push(r.timestamp);
-  });
-  var speakerSummaries = Object.keys(speakers).map(function (k) { return speakers[k]; });
+  var speakerCount = {};
+  rows.forEach(function (r) { speakerCount[r.speaker || '?'] = true; });
+  var numSpeakers = Object.keys(speakerCount).length;
   var first = rows[0], last = rows[rows.length - 1];
   return normalizeAiResult_({
     discussionSummary: '[MOCK] สรุปการอภิปรายหัวข้อ ' + (topicMeta.topic_title || topicMeta.topic_no) +
-      ' จากผู้พูด ' + speakerSummaries.length + ' ราย รวม ' + rows.length + ' รายการ',
-    speakerSummaries: speakerSummaries,
+      ' จากผู้พูด ' + numSpeakers + ' ราย รวม ' + rows.length + ' รายการ',
     questions: [],
     decisions: rows.length ? [{
       decision: '[MOCK] ที่ประชุมรับทราบเนื้อหาของหัวข้อนี้',

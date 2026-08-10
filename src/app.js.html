@@ -817,27 +817,21 @@ function summaryTopicBlock(topic) {
 }
 
 function summaryEditor(topic, r) {
-  var spk = (r.speakerSummaries || []).map(function (s, i) {
-    return '<div class="sum-field"><label>ผู้พูด ' + esc(s.speaker) + '</label>' +
-      '<textarea class="f-spk" data-i="' + i + '" data-speaker="' + esc(s.speaker) + '">' +
-      esc((s.keyPoints || []).join('\n')) + '</textarea></div>';
-  }).join('');
-
   var decisions = (r.decisions || []).map(function (d) {
     return (d.decision || '') + (d.status ? '  [' + d.status + ']' : '');
   }).join('\n');
   var actions = (r.actionItems || []).map(function (a) {
     return [a.action || '', a.owner || '', a.dueText || a.dueDate || ''].join(' | ');
   }).join('\n');
-  var questions = (r.questions || []).map(function (q) {
-    return (q.speaker ? q.speaker + ': ' : '') + (q.question || '') + (q.timestamp ? ' (' + q.timestamp + ')' : '');
-  }).join('\n');
+  // คำถาม/คำชี้แจง จับคู่บรรทัดต่อบรรทัด (คำถามบรรทัด i ↔ คำชี้แจงบรรทัด i)
+  var questions = (r.questions || []).map(function (q) { return q.question || ''; }).join('\n');
+  var answers = (r.questions || []).map(function (q) { return q.answer || ''; }).join('\n');
 
   return '<div class="sum-body">' +
     '<div class="sum-field"><label>สรุปการอภิปราย</label><textarea class="f-disc">' + esc(r.discussionSummary || '') + '</textarea></div>' +
-    spk +
     '<div class="sum-field"><label>คำถามที่เกิดขึ้น (บรรทัดละ 1 ข้อ)</label><textarea class="f-q">' + esc(questions) + '</textarea></div>' +
-    '<div class="sum-field"><label>มติ / ข้อสรุป (บรรทัดละ 1 มติ)</label><textarea class="f-dec">' + esc(decisions) + '</textarea></div>' +
+    '<div class="sum-field"><label>การชี้แจงคำถาม (บรรทัดละ 1 ข้อ ให้ตรงกับคำถาม)</label><textarea class="f-ans">' + esc(answers) + '</textarea></div>' +
+    '<div class="sum-field"><label>มติที่ประชุม / ข้อสรุป (บรรทัดละ 1 มติ)</label><textarea class="f-dec">' + esc(decisions) + '</textarea></div>' +
     '<div class="sum-field"><label>Action Items (รูปแบบ: งาน | ผู้รับผิดชอบ | กำหนดเวลา)</label><textarea class="f-act">' + esc(actions) + '</textarea></div>' +
     '<div class="inline-note">confidence: ' + (r.confidence === null || r.confidence === undefined ? '—' : r.confidence) + '</div>' +
     '<div class="btn-row" style="margin-top:10px">' +
@@ -863,15 +857,20 @@ function collectReviewed(block, topic) {
   var orig = effResult(topic) || {};
   var decLines = splitLines($('.f-dec', block).value);
   var actLines = splitLines($('.f-act', block).value);
-  var qLines = splitLines($('.f-q', block).value);
+  // คำถาม/คำชี้แจง แยกบรรทัด "แบบคงลำดับ" (ไม่ตัดบรรทัดว่าง) เพื่อให้จับคู่ index ตรงกัน
+  var qRaw = String($('.f-q', block).value || '').split('\n').map(function (x) { return x.trim(); });
+  var aRaw = String($('.f-ans', block).value || '').split('\n').map(function (x) { return x.trim(); });
+  var questions = [];
+  qRaw.forEach(function (q, i) {
+    if (!q) return; // ข้ามคำถามว่าง (แต่ index คำชี้แจงยังอิงตำแหน่งเดิม)
+    var oq = (orig.questions || [])[i] || {};
+    questions.push({ question: q, answer: aRaw[i] || '', speaker: oq.speaker || '', timestamp: oq.timestamp || '' });
+  });
   return {
     agendaNo: orig.agendaNo, agendaTitle: orig.agendaTitle,
     topicNo: topic.topic_no, topicTitle: topic.topic_title,
     discussionSummary: $('.f-disc', block).value.trim(),
-    speakerSummaries: $all('.f-spk', block).map(function (ta) {
-      return { speaker: ta.dataset.speaker, keyPoints: splitLines(ta.value), timestamps: [] };
-    }),
-    questions: qLines.map(function (l) { return { question: l }; }),
+    questions: questions,
     decisions: decLines.map(function (l, i) {
       var od = (orig.decisions || [])[i] || {};
       return { decision: l.replace(/\s*\[[^\]]*\]\s*$/, '').trim(), status: od.status || 'explicit',

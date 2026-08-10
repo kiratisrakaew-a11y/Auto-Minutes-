@@ -148,13 +148,9 @@ function agendaBlocks_(topics) {
     if (!r) { blocks.push({ text: '(ยังไม่มีสรุป)' }); blocks.push({ text: '' }); return; }
 
     if (r.discussionSummary) blocks.push({ text: r.discussionSummary });
-    (r.speakerSummaries || []).forEach(function (s) {
-      (s.keyPoints || []).forEach(function (kp) {
-        if (kp) blocks.push({ text: '- (' + (s.speaker || '') + ') ' + kp });
-      });
-    });
     (r.questions || []).forEach(function (q) {
       if (q.question) blocks.push({ text: (q.speaker ? q.speaker + ' สอบถามว่า ' : 'คำถาม: ') + q.question });
+      if (q.answer) blocks.push({ text: 'ชี้แจงว่า ' + q.answer });
     });
     var decisions = (r.decisions || []).map(function (d) { return d.decision; }).filter(function (x) { return x; });
     if (decisions.length) {
@@ -179,15 +175,11 @@ function buildAgendaContent_(topics) {
     var r = effectiveResult_(t);
     if (!r) { lines.push('      (ยังไม่มีสรุป)'); lines.push(''); return; }
     if (r.discussionSummary) lines.push('      ' + r.discussionSummary);
-    (r.speakerSummaries || []).forEach(function (s) {
-      (s.keyPoints || []).forEach(function (kp) {
-        lines.push('      - (' + s.speaker + ') ' + kp);
-      });
-    });
     if ((r.questions || []).length) {
       lines.push('      คำถาม:');
       r.questions.forEach(function (q) {
         lines.push('        • ' + (q.question || '') + (q.speaker ? ' [' + q.speaker + ']' : ''));
+        if (q.answer) lines.push('          ชี้แจงว่า ' + q.answer);
       });
     }
     if ((r.decisions || []).length) {
