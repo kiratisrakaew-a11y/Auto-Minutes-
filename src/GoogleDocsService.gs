@@ -42,7 +42,7 @@ function generateMeetingDocument(jobId) {
     doc = DocumentApp.create(docName);
     fileId = doc.getId();
     if (folder) moveFileToFolder_(fileId, folder);
-    writeFallbackDoc_(doc, placeholders);
+    buildMinutesDoc_(doc, job, info, topics);
   }
   doc.saveAndClose();
 
@@ -166,7 +166,106 @@ function applyPlaceholders_(doc, map) {
   });
 }
 
-/** เขียนเอกสาร fallback (ไม่มี template) แบบมีโครงสร้าง */
+/**
+ * สร้างเอกสารรายงานการประชุมแบบทางการ (Plan B style) ด้วย DocumentApp
+ * ดึงวาระ/หัวข้อ + สรุป AI (effectiveResult_) มาเรียงตามรูปแบบมาตรฐาน
+ */
+function buildMinutesDoc_(doc, job, info, topics) {
+  info = info || {};
+  var body = doc.getBody();
+  body.clear();
+  try { body.setText(''); } catch (e) { /* ignore */ }
+
+  var CENTER = DocumentApp.HorizontalAlignment.CENTER;
+
+  // ---- ส่วนหัว ----
+  para_(body, job.meeting_title || 'รายงานการประชุม', { bold: true, align: CENTER, size: 16 });
+  var when = [];
+  if (job.meeting_date) when.push('ประชุมเมื่อวันที่ ' + job.meeting_date);
+  var timeStr = (info.start_time || '') + (info.end_time ? ' - ' + info.end_time : '');
+  if (timeStr) when.push('เวลา ' + timeStr + ' น.');
+  if (info.location) when.push('ณ ' + info.location);
+  if (when.length) para_(body, when.join(' '), { align: CENTER });
+  if (info.ref_no) para_(body, 'เลขที่อ้างอิง: ' + info.ref_no, { align: CENTER });
+  para_(body, '', {});
+
+  // ---- ผู้เข้าร่วม ----
+  if (info.chairman) para_(body, 'ประธานที่ประชุม: ' + info.chairman, {});
+  if (info.secretary) para_(body, 'เลขานุการ: ' + info.secretary, {});
+  if (info.participants) {
+    para_(body, 'ผู้เข้าร่วมประชุม:', { bold: true });
+    splitList_(info.participants).forEach(function (p, i) { para_(body, (i + 1) + '. ' + p, {}); });
+  }
+  para_(body, '', {});
+
+  // ---- เปิดประชุม ----
+  var chair = info.chairman || 'ประธานฯ';
+  para_(body, chair + ' ทำหน้าที่เป็นประธานในที่ประชุม กล่าวเปิดการประชุม และดำเนินการประชุมตามระเบียบวาระดังต่อไปนี้', {});
+  para_(body, '', {});
+
+  // ---- วาระ / หัวข้อ ----
+  var lastAgenda = null;
+  topics.forEach(function (t) {
+    if (t.agenda_no !== lastAgenda) {
+      lastAgenda = t.agenda_no;
+      para_(body, 'วาระที่ ' + t.agenda_no + ' ' + (t.agenda_title || ''), { bold: true, size: 13 });
+    }
+    para_(body, t.topic_no + ' ' + (t.topic_title || ''), { bold: true });
+
+    var r = effectiveResult_(t);
+    if (!r) { para_(body, '(ยังไม่มีสรุป)', {}); para_(body, '', {}); return; }
+
+    if (r.discussionSummary) para_(body, r.discussionSummary, {});
+    (r.speakerSummaries || []).forEach(function (s) {
+      (s.keyPoints || []).forEach(function (kp) {
+        if (kp) para_(body, '- (' + (s.speaker || '') + ') ' + kp, {});
+      });
+    });
+    (r.questions || []).forEach(function (q) {
+      if (q.question) para_(body, (q.speaker ? q.speaker + ' สอบถามว่า ' : 'คำถาม: ') + q.question, {});
+    });
+    // มติที่ประชุม
+    var decisions = (r.decisions || []).map(function (d) { return d.decision; }).filter(function (x) { return x; });
+    if (decisions.length) {
+      para_(body, 'มติที่ประชุม ' + decisions.join(' และ '), { bold: true });
+    }
+    para_(body, '', {});
+  });
+
+  // ---- Action Items ----
+  var actionText = buildActionItems_(topics);
+  para_(body, 'สรุป Action Items', { bold: true, size: 13 });
+  (actionText || '').split('\n').forEach(function (line) { if (line) para_(body, line, {}); });
+  para_(body, '', {});
+  para_(body, '', {});
+
+  // ---- ลงชื่อ ----
+  para_(body, 'ลงชื่อ ____________________________ ประธานที่ประชุม', { align: CENTER });
+  para_(body, '(' + (info.chairman || '') + ')', { align: CENTER });
+  para_(body, '', {});
+  para_(body, 'ลงชื่อ ____________________________ เลขานุการ / ผู้บันทึกรายงานการประชุม', { align: CENTER });
+  para_(body, '(' + (info.secretary || '') + ')', { align: CENTER });
+}
+
+/** เพิ่มย่อหน้าอย่างปลอดภัย (ข้อความว่าง = ย่อหน้าว่าง; ตั้ง bold/align/size ได้) */
+function para_(body, text, opts) {
+  opts = opts || {};
+  var p = body.appendParagraph(text === null || text === undefined ? '' : String(text));
+  if (opts.align) p.setAlignment(opts.align);
+  if (String(text || '') !== '') {
+    if (opts.bold) p.setBold(true);
+    if (opts.size) p.setFontSize(opts.size);
+  }
+  return p;
+}
+
+/** แยกรายชื่อ/รายการจากข้อความ (ขึ้นบรรทัดใหม่ หรือคั่นด้วยจุลภาค) */
+function splitList_(text) {
+  return String(text || '').split(/[\n,]/).map(function (x) { return x.trim(); })
+    .filter(function (x) { return x; });
+}
+
+/** เขียนเอกสาร fallback (ไม่มี template) แบบมีโครงสร้าง — คงไว้เผื่อใช้ */
 function writeFallbackDoc_(doc, m) {
   var body = doc.getBody();
   body.clear();
