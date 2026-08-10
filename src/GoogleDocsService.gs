@@ -148,9 +148,10 @@ function agendaBlocks_(topics) {
     if (!r) { blocks.push({ text: '(ยังไม่มีสรุป)' }); blocks.push({ text: '' }); return; }
 
     if (r.discussionSummary) blocks.push({ text: r.discussionSummary });
+    // ชื่อผู้ถาม/ผู้ตอบ + กริยา อยู่ในข้อความสรุปแล้ว -> พิมพ์ตรง ๆ
     (r.questions || []).forEach(function (q) {
-      if (q.question) blocks.push({ text: (q.speaker ? q.speaker + ' สอบถามว่า ' : 'คำถาม: ') + q.question });
-      if (q.answer) blocks.push({ text: 'ชี้แจงว่า ' + q.answer });
+      if (q.question) blocks.push({ text: q.question });
+      if (q.answer) blocks.push({ text: q.answer });
     });
     var decisions = (r.decisions || []).map(function (d) { return d.decision; }).filter(function (x) { return x; });
     if (decisions.length) {
@@ -176,10 +177,10 @@ function buildAgendaContent_(topics) {
     if (!r) { lines.push('      (ยังไม่มีสรุป)'); lines.push(''); return; }
     if (r.discussionSummary) lines.push('      ' + r.discussionSummary);
     if ((r.questions || []).length) {
-      lines.push('      คำถาม:');
+      lines.push('      คำถาม-คำชี้แจง:');
       r.questions.forEach(function (q) {
-        lines.push('        • ' + (q.question || '') + (q.speaker ? ' [' + q.speaker + ']' : ''));
-        if (q.answer) lines.push('          ชี้แจงว่า ' + q.answer);
+        if (q.question) lines.push('        • ' + q.question);
+        if (q.answer) lines.push('          ' + q.answer);
       });
     }
     if ((r.decisions || []).length) {

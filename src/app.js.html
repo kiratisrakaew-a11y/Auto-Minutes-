@@ -829,8 +829,8 @@ function summaryEditor(topic, r) {
 
   return '<div class="sum-body">' +
     '<div class="sum-field"><label>สรุปการอภิปราย</label><textarea class="f-disc">' + esc(r.discussionSummary || '') + '</textarea></div>' +
-    '<div class="sum-field"><label>คำถามที่เกิดขึ้น (บรรทัดละ 1 ข้อ)</label><textarea class="f-q">' + esc(questions) + '</textarea></div>' +
-    '<div class="sum-field"><label>การชี้แจงคำถาม (บรรทัดละ 1 ข้อ ให้ตรงกับคำถาม)</label><textarea class="f-ans">' + esc(answers) + '</textarea></div>' +
+    '<div class="sum-field"><label>คำถามที่เกิดขึ้น (สรุป + ระบุผู้ถาม, บรรทัดละ 1 ข้อ)</label><textarea class="f-q">' + esc(questions) + '</textarea></div>' +
+    '<div class="sum-field"><label>การชี้แจงคำถาม (สรุป + ระบุผู้ตอบ, บรรทัดละ 1 ข้อ ให้ตรงกับคำถาม)</label><textarea class="f-ans">' + esc(answers) + '</textarea></div>' +
     '<div class="sum-field"><label>มติที่ประชุม / ข้อสรุป (บรรทัดละ 1 มติ)</label><textarea class="f-dec">' + esc(decisions) + '</textarea></div>' +
     '<div class="sum-field"><label>Action Items (รูปแบบ: งาน | ผู้รับผิดชอบ | กำหนดเวลา)</label><textarea class="f-act">' + esc(actions) + '</textarea></div>' +
     '<div class="inline-note">confidence: ' + (r.confidence === null || r.confidence === undefined ? '—' : r.confidence) + '</div>' +
@@ -864,7 +864,7 @@ function collectReviewed(block, topic) {
   qRaw.forEach(function (q, i) {
     if (!q) return; // ข้ามคำถามว่าง (แต่ index คำชี้แจงยังอิงตำแหน่งเดิม)
     var oq = (orig.questions || [])[i] || {};
-    questions.push({ question: q, answer: aRaw[i] || '', speaker: oq.speaker || '', timestamp: oq.timestamp || '' });
+    questions.push({ question: q, answer: aRaw[i] || '', timestamp: oq.timestamp || '' });
   });
   return {
     agendaNo: orig.agendaNo, agendaTitle: orig.agendaTitle,
