@@ -11,8 +11,9 @@
 
 /** placeholder ที่รองรับใน document template */
 // {{MEETING_TITLE}} {{MEETING_DATE}} {{MEETING_TIME}} {{MEETING_LOCATION}}
-// {{CHAIRMAN}} {{SECRETARY}} {{PARTICIPANTS}} {{MEETING_REF}}
-// {{AGENDA_CONTENT}} {{ACTION_ITEMS}}
+// {{CHAIRMAN}} {{SECRETARY}} {{PARTICIPANTS}} {{MEETING_REF}} {{ACTION_ITEMS}}
+// {{AGENDA_BODY}}     -> จุดแทรกวาระ/หัวข้อ "แบบมีรูปแบบ" (หัวข้อตัวหนา เนื้อหาปกติ) — แนะนำ
+// {{AGENDA_CONTENT}}  -> จุดแทรกวาระ/หัวข้อ "แบบข้อความล้วน" (ไม่มีตัวหนา) — ใช้ตัวใดตัวหนึ่ง
 
 /** สร้างเอกสารการประชุมจาก job (ต้องยืนยันครบทุกหัวข้อ) */
 function generateMeetingDocument(jobId) {
@@ -37,7 +38,8 @@ function generateMeetingDocument(jobId) {
     var copy = DriveApp.getFileById(tpl.google_doc_id).makeCopy(docName, folder);
     fileId = copy.getId();
     doc = DocumentApp.openById(fileId);
-    applyPlaceholders_(doc, placeholders);
+    applyPlaceholders_(doc, placeholders);       // metadata + ACTION_ITEMS + AGENDA_CONTENT (เผื่อ fallback)
+    insertStructuredAgenda_(doc, topics);        // แทรกวาระแบบมีรูปแบบที่ marker {{AGENDA_BODY}}
   } else {
     doc = DocumentApp.create(docName);
     fileId = doc.getId();
@@ -94,6 +96,48 @@ function buildPlaceholders_(job, info, topics) {
 /** ใช้ผลที่ผู้ใช้แก้ ถ้าไม่มีใช้ผล AI */
 function effectiveResult_(topic) {
   return topic.user_edited_result || topic.ai_result || null;
+}
+
+/**
+ * แหล่งข้อมูลกลางของ "บล็อกวาระ" — ใช้ร่วมทั้ง buildMinutesDoc_ (append)
+ * และ insertStructuredAgenda_ (แทรกที่ marker) เพื่อให้หน้าตา/รูปแบบตรงกัน
+ *
+ * คืน array ของ { text, bold, size, boldPrefixLen }:
+ *  - หัวข้อวาระ / หัวข้อย่อย -> bold ทั้งย่อหน้า
+ *  - เนื้อหา -> ปกติ
+ *  - "มติที่ประชุม ..." -> bold เฉพาะ label (boldPrefixLen)
+ *  - บรรทัดว่างคั่น -> { text: '' }
+ */
+function agendaBlocks_(topics) {
+  var blocks = [];
+  var lastAgenda = null;
+  (topics || []).forEach(function (t) {
+    if (t.agenda_no !== lastAgenda) {
+      lastAgenda = t.agenda_no;
+      blocks.push({ text: 'วาระที่ ' + t.agenda_no + ' ' + (t.agenda_title || ''), bold: true, size: 13 });
+    }
+    blocks.push({ text: t.topic_no + ' ' + (t.topic_title || ''), bold: true });
+
+    var r = effectiveResult_(t);
+    if (!r) { blocks.push({ text: '(ยังไม่มีสรุป)' }); blocks.push({ text: '' }); return; }
+
+    if (r.discussionSummary) blocks.push({ text: r.discussionSummary });
+    (r.speakerSummaries || []).forEach(function (s) {
+      (s.keyPoints || []).forEach(function (kp) {
+        if (kp) blocks.push({ text: '- (' + (s.speaker || '') + ') ' + kp });
+      });
+    });
+    (r.questions || []).forEach(function (q) {
+      if (q.question) blocks.push({ text: (q.speaker ? q.speaker + ' สอบถามว่า ' : 'คำถาม: ') + q.question });
+    });
+    var decisions = (r.decisions || []).map(function (d) { return d.decision; }).filter(function (x) { return x; });
+    if (decisions.length) {
+      var label = 'มติที่ประชุม';
+      blocks.push({ text: label + ' ' + decisions.join(' และ '), boldPrefixLen: label.length });
+    }
+    blocks.push({ text: '' });
+  });
+  return blocks;
 }
 
 /** สร้างเนื้อหาวาระ/หัวข้อเป็นข้อความ (จัดกลุ่มตามวาระ) */
@@ -203,33 +247,9 @@ function buildMinutesDoc_(doc, job, info, topics) {
   para_(body, chair + ' ทำหน้าที่เป็นประธานในที่ประชุม กล่าวเปิดการประชุม และดำเนินการประชุมตามระเบียบวาระดังต่อไปนี้', {});
   para_(body, '', {});
 
-  // ---- วาระ / หัวข้อ ----
-  var lastAgenda = null;
-  topics.forEach(function (t) {
-    if (t.agenda_no !== lastAgenda) {
-      lastAgenda = t.agenda_no;
-      para_(body, 'วาระที่ ' + t.agenda_no + ' ' + (t.agenda_title || ''), { bold: true, size: 13 });
-    }
-    para_(body, t.topic_no + ' ' + (t.topic_title || ''), { bold: true });
-
-    var r = effectiveResult_(t);
-    if (!r) { para_(body, '(ยังไม่มีสรุป)', {}); para_(body, '', {}); return; }
-
-    if (r.discussionSummary) para_(body, r.discussionSummary, {});
-    (r.speakerSummaries || []).forEach(function (s) {
-      (s.keyPoints || []).forEach(function (kp) {
-        if (kp) para_(body, '- (' + (s.speaker || '') + ') ' + kp, {});
-      });
-    });
-    (r.questions || []).forEach(function (q) {
-      if (q.question) para_(body, (q.speaker ? q.speaker + ' สอบถามว่า ' : 'คำถาม: ') + q.question, {});
-    });
-    // มติที่ประชุม
-    var decisions = (r.decisions || []).map(function (d) { return d.decision; }).filter(function (x) { return x; });
-    if (decisions.length) {
-      para_(body, 'มติที่ประชุม ' + decisions.join(' และ '), { bold: true });
-    }
-    para_(body, '', {});
+  // ---- วาระ / หัวข้อ (ใช้แหล่งข้อมูลกลาง agendaBlocks_) ----
+  agendaBlocks_(topics).forEach(function (b) {
+    para_(body, b.text, { bold: b.bold, size: b.size, boldPrefixLen: b.boldPrefixLen });
   });
 
   // ---- Action Items ----
@@ -247,16 +267,76 @@ function buildMinutesDoc_(doc, job, info, topics) {
   para_(body, '(' + (info.secretary || '') + ')', { align: CENTER });
 }
 
-/** เพิ่มย่อหน้าอย่างปลอดภัย (ข้อความว่าง = ย่อหน้าว่าง; ตั้ง bold/align/size ได้) */
+/** เพิ่มย่อหน้าอย่างปลอดภัย (ข้อความว่าง = ย่อหน้าว่าง; ตั้ง bold/align/size/boldPrefixLen ได้) */
 function para_(body, text, opts) {
   opts = opts || {};
-  var p = body.appendParagraph(text === null || text === undefined ? '' : String(text));
+  var str = text === null || text === undefined ? '' : String(text);
+  var p = body.appendParagraph(str);
+  applyParagraphFormat_(p, str, opts);
+  return p;
+}
+
+/**
+ * ใส่รูปแบบให้ย่อหน้า (ใช้ร่วมกับ para_ และ insertStructuredAgenda_)
+ *  - bold ทั้งย่อหน้า (opts.bold), ขนาดฟอนต์ (opts.size), จัดตำแหน่ง (opts.align)
+ *  - boldPrefixLen: bold เฉพาะช่วงแรก (label) ส่วนที่เหลือปกติ — สำหรับ "มติที่ประชุม ..."
+ */
+function applyParagraphFormat_(p, str, opts) {
+  opts = opts || {};
   if (opts.align) p.setAlignment(opts.align);
-  if (String(text || '') !== '') {
-    if (opts.bold) p.setBold(true);
-    if (opts.size) p.setFontSize(opts.size);
+  if (str === '') return; // ย่อหน้าว่าง: ห้ามแตะ text formatting (กัน error)
+  if (opts.size) p.setFontSize(opts.size);
+  if (opts.boldPrefixLen && opts.boldPrefixLen > 0) {
+    // bold เฉพาะ label ช่วงแรก (0 .. len-1) เนื้อหาที่เหลือปกติ
+    var end = Math.min(opts.boldPrefixLen, str.length) - 1;
+    if (end >= 0) p.editAsText().setBold(0, end, true);
+  } else if (opts.bold) {
+    p.setBold(true);
   }
   return p;
+}
+
+/**
+ * แทรกเนื้อหาวาระแบบมีรูปแบบ (หัวข้อตัวหนา เนื้อหาปกติ) ลงใน template Doc
+ * ตรงตำแหน่ง marker {{AGENDA_BODY}} — คงหัวกระดาษ/banner/ท้ายกระดาษของ template ไว้
+ * ถ้าไม่พบ marker -> ไม่ทำอะไร (template แบบเก่ายังใช้ {{AGENDA_CONTENT}} เป็นข้อความได้)
+ */
+function insertStructuredAgenda_(doc, topics) {
+  var body = doc.getBody();
+  var found;
+  try { found = body.findText('\\{\\{AGENDA_BODY\\}\\}'); } catch (e) { found = null; }
+  if (!found) return;
+
+  // หา element ระดับบนสุด (child ตรงของ body = parent เป็น BODY_SECTION) ที่มี marker
+  var para = found.getElement();
+  while (para && para.getParent() &&
+         para.getParent().getType() !== DocumentApp.ElementType.BODY_SECTION) {
+    para = para.getParent();
+  }
+  if (!para) return;
+  var markerIndex;
+  try { markerIndex = body.getChildIndex(para); } catch (e) { return; }
+
+  // แทรกบล็อกวาระก่อนย่อหน้า marker ตามลำดับ (index เพิ่มทีละบล็อก)
+  var blocks = agendaBlocks_(topics);
+  var insertAt = markerIndex;
+  blocks.forEach(function (b) {
+    var text = b.text === null || b.text === undefined ? '' : String(b.text);
+    var p = body.insertParagraph(insertAt, text);
+    applyParagraphFormat_(p, text, { bold: b.bold, size: b.size, boldPrefixLen: b.boldPrefixLen });
+    insertAt++;
+  });
+
+  // ลบ element marker ทิ้ง (body ต้องเหลืออย่างน้อย 1 child เสมอ)
+  try {
+    if (body.getNumChildren() > 1) {
+      body.removeChild(para);
+    } else {
+      body.replaceText('\\{\\{AGENDA_BODY\\}\\}', ''); // เหลือ child เดียว: เคลียร์แค่ข้อความ marker
+    }
+  } catch (e) {
+    try { body.replaceText('\\{\\{AGENDA_BODY\\}\\}', ''); } catch (e2) { /* ignore */ }
+  }
 }
 
 /** แยกรายชื่อ/รายการจากข้อความ (ขึ้นบรรทัดใหม่ หรือคั่นด้วยจุลภาค) */
