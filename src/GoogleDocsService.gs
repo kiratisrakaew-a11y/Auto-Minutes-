@@ -179,7 +179,7 @@ function writeFallbackDoc_(doc, m) {
   meta.forEach(function (kv) {
     if (kv[1]) body.appendParagraph(kv[0] + ': ' + kv[1]);
   });
-  body.appendParagraph('').appendText('');
+  body.appendParagraph('');  // บรรทัดว่างคั่น (appendParagraph('') ปลอดภัย; appendText('') ต่างหากที่ throw)
   body.appendParagraph('วาระการประชุม').setHeading(DocumentApp.ParagraphHeading.HEADING1);
   (m.AGENDA_CONTENT || '').split('\n').forEach(function (line) { body.appendParagraph(line); });
   body.appendParagraph('Action Items').setHeading(DocumentApp.ParagraphHeading.HEADING1);
