@@ -81,7 +81,7 @@ function buildPlaceholders_(job, info, topics) {
   }
   return {
     MEETING_TITLE: job.meeting_title || '',
-    MEETING_DATE: job.meeting_date ? String(job.meeting_date) : '',
+    MEETING_DATE: formatThaiDate_(job.meeting_date),
     MEETING_TIME: timeStr,
     MEETING_LOCATION: info.location || '',
     CHAIRMAN: info.chairman || '',
@@ -96,6 +96,32 @@ function buildPlaceholders_(job, info, topics) {
 /** ใช้ผลที่ผู้ใช้แก้ ถ้าไม่มีใช้ผล AI */
 function effectiveResult_(topic) {
   return topic.user_edited_result || topic.ai_result || null;
+}
+
+/**
+ * แปลงวันที่เป็นรูปแบบไทย "D <เดือนไทย> <ปี พ.ศ.>" (เช่น 14 สิงหาคม 2569)
+ * รับได้ทั้ง Date object (Google Sheets มักคืนแบบนี้) และ string 'yyyy-mm-dd'
+ * ถ้าแปลงไม่ได้ -> คืนค่าเดิมเป็นข้อความ; ถ้าว่าง -> ''
+ */
+function formatThaiDate_(value) {
+  if (value === null || value === undefined || value === '') return '';
+  var d = null;
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    d = value;
+  } else {
+    var s = String(value).trim();
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    } else {
+      var parsed = new Date(s);
+      if (!isNaN(parsed.getTime())) d = parsed;
+    }
+  }
+  if (!d || isNaN(d.getTime())) return String(value);
+  var months = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+    'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + (d.getFullYear() + 543);
 }
 
 /**
@@ -225,7 +251,8 @@ function buildMinutesDoc_(doc, job, info, topics) {
   // ---- ส่วนหัว ----
   para_(body, job.meeting_title || 'รายงานการประชุม', { bold: true, align: CENTER, size: 16 });
   var when = [];
-  if (job.meeting_date) when.push('ประชุมเมื่อวันที่ ' + job.meeting_date);
+  var dateStr = formatThaiDate_(job.meeting_date);
+  if (dateStr) when.push('ประชุมเมื่อวันที่ ' + dateStr);
   var timeStr = (info.start_time || '') + (info.end_time ? ' - ' + info.end_time : '');
   if (timeStr) when.push('เวลา ' + timeStr + ' น.');
   if (info.location) when.push('ณ ' + info.location);
@@ -278,14 +305,17 @@ function para_(body, text, opts) {
 
 /**
  * ใส่รูปแบบให้ย่อหน้า (ใช้ร่วมกับ para_ และ insertStructuredAgenda_)
- *  - bold ทั้งย่อหน้า (opts.bold), ขนาดฟอนต์ (opts.size), จัดตำแหน่ง (opts.align)
+ *  - ฟอนต์/ขนาด: opts.fontFamily, opts.fontSize (ใช้ให้ตรง template), opts.size (สำรอง)
+ *  - bold ทั้งย่อหน้า (opts.bold), จัดตำแหน่ง (opts.align)
  *  - boldPrefixLen: bold เฉพาะช่วงแรก (label) ส่วนที่เหลือปกติ — สำหรับ "มติที่ประชุม ..."
  */
 function applyParagraphFormat_(p, str, opts) {
   opts = opts || {};
   if (opts.align) p.setAlignment(opts.align);
   if (str === '') return; // ย่อหน้าว่าง: ห้ามแตะ text formatting (กัน error)
-  if (opts.size) p.setFontSize(opts.size);
+  if (opts.fontFamily) { try { p.setFontFamily(opts.fontFamily); } catch (e) { /* ignore */ } }
+  var size = opts.fontSize || opts.size;
+  if (size) { try { p.setFontSize(size); } catch (e) { /* ignore */ } }
   if (opts.boldPrefixLen && opts.boldPrefixLen > 0) {
     // bold เฉพาะ label ช่วงแรก (0 .. len-1) เนื้อหาที่เหลือปกติ
     var end = Math.min(opts.boldPrefixLen, str.length) - 1;
@@ -317,13 +347,26 @@ function insertStructuredAgenda_(doc, topics) {
   var markerIndex;
   try { markerIndex = body.getChildIndex(para); } catch (e) { return; }
 
+  // อ่านฟอนต์/ขนาดจากย่อหน้า marker เพื่อให้เนื้อหาที่แทรกตรงกับ template (ไม่ใช้ default บาง ๆ)
+  var baseFont = null, baseSize = null;
+  try { baseFont = para.getFontFamily && para.getFontFamily(); } catch (e) { /* ignore */ }
+  try { baseSize = para.getFontSize && para.getFontSize(); } catch (e) { /* ignore */ }
+  if (!baseFont) baseFont = 'TH Sarabun New';
+  if (!baseSize) baseSize = 16;
+
   // แทรกบล็อกวาระก่อนย่อหน้า marker ตามลำดับ (index เพิ่มทีละบล็อก)
+  // ทุกย่อหน้าใช้ฟอนต์/ขนาดของ template; หัวข้อต่างที่ "ตัวหนา" อย่างเดียว (ไม่ย่อขนาด)
   var blocks = agendaBlocks_(topics);
   var insertAt = markerIndex;
   blocks.forEach(function (b) {
     var text = b.text === null || b.text === undefined ? '' : String(b.text);
     var p = body.insertParagraph(insertAt, text);
-    applyParagraphFormat_(p, text, { bold: b.bold, size: b.size, boldPrefixLen: b.boldPrefixLen });
+    applyParagraphFormat_(p, text, {
+      bold: b.bold,
+      boldPrefixLen: b.boldPrefixLen,
+      fontFamily: baseFont,
+      fontSize: baseSize
+    });
     insertAt++;
   });
 
