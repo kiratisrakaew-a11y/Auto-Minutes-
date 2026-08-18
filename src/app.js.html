@@ -116,7 +116,7 @@ function boot() {
     AM.settings = data.settings || {};
     var badge = $('#userBadge');
     badge.hidden = false;
-    badge.innerHTML = esc(AM.user.email) + ' · <b>' + esc(AM.user.role) + '</b>';
+    badge.innerHTML = '<b>' + esc(AM.user.role) + '</b>';
     $('#stepper').hidden = false;
     $('#pages').hidden = false;
     bindStepper();
